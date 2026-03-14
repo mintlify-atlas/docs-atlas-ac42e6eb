@@ -1,0 +1,165 @@
+---
+title: SalesViewModel
+description: ViewModel, factory, and repository reference for point-of-sale cart management and sale submission.
+---
+
+`SalesViewModel` manages the in-memory shopping cart, validates product lookups, and submits completed sales to the database. It is shared between the sales screen and the dashboard.
+
+## Constructor
+
+```kotlin
+class SalesViewModel(
+    private val repo: SaleRepository,
+    private val productDao: ProductDao
+) : ViewModel()
+```
+
+<ParamField path="repo" type="SaleRepository" required>
+  Handles database transactions for creating sales.
+</ParamField>
+
+<ParamField path="productDao" type="ProductDao" required>
+  Used directly to look up products by code when adding items to the cart.
+</ParamField>
+
+## Factory
+
+```kotlin
+class SalesViewModelFactory(
+    private val repo: SaleRepository,
+    private val productDao: ProductDao
+) : ViewModelProvider.Factory
+```
+
+## State properties
+
+```kotlin
+val cart: StateFlow<List<CartItem>> = _cart.asStateFlow()
+
+val total: StateFlow<Double> = cart
+    .map { items -> items.sumOf { it.product.price * it.qty } }
+    .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0.0)
+
+val events: SharedFlow<String> = _events
+
+val weeklySales: StateFlow<List<DailySaleSummary>> = _weeklySales.asStateFlow()
+```
+
+| Property | Type | Description |
+|---|---|---|
+| `cart` | `StateFlow<List<CartItem>>` | Current cart contents. Each `CartItem` holds a `Product` and a quantity. |
+| `total` | `StateFlow<Double>` | Derived sum of `product.price * qty` for all cart items. Updates reactively when the cart changes. |
+| `events` | `SharedFlow<String>` | One-shot messages for snackbar display (errors and confirmations). |
+| `weeklySales` | `StateFlow<List<DailySaleSummary>>` | Daily sale totals for the past 7 days. Loaded in `init` and collected until the ViewModel is cleared. |
+
+### CartItem
+
+Defined inside `SaleRepository`:
+
+```kotlin
+data class CartItem(val product: Product, val qty: Int) {
+    val subtotal: Double get() = product.price * qty
+}
+```
+
+## Cart management methods
+
+### addByCode
+
+```kotlin
+fun addByCode(code: String, qty: Int): Job
+```
+
+Looks up the product by `code` (trimmed and uppercased) via `ProductDao.findByCode`. If found and `qty > 0`, adds the item to the cart or increments the existing quantity. Emits an error message on `events` if the code is not found or the quantity is invalid.
+
+### addByCodeSafe
+
+```kotlin
+fun addByCodeSafe(code: String, qty: Int): Job
+```
+
+Validates that `code` is not blank and `qty > 0` before delegating to `addByCode`. Catches and emits any exception as an `events` message. Prefer this method in UI code.
+
+### changeQty
+
+```kotlin
+fun changeQty(productId: Int, qty: Int)
+```
+
+Updates the quantity of the cart item matching `productId`. The quantity is coerced to at least `1`.
+
+### remove
+
+```kotlin
+fun remove(productId: Int)
+```
+
+Removes the cart item matching `productId`.
+
+### clearCart
+
+```kotlin
+fun clearCart()
+```
+
+Clears all items from the cart.
+
+## Sale submission
+
+### finalizeSale
+
+```kotlin
+fun finalizeSale(): Job
+```
+
+Delegates to `SaleRepository.makeSale` with the current cart contents. On success, clears the cart and emits a confirmation message with the new sale ID. On failure (e.g. insufficient stock), emits the exception message without modifying the cart.
+
+```kotlin
+fun finalizeSale() = viewModelScope.launch {
+    try {
+        val id = repo.makeSale(_cart.value)
+        clearCart()
+        _events.tryEmit("Venta realizada (#$id)")
+    } catch (e: Exception) {
+        _events.tryEmit(e.message ?: "Error al registrar la venta")
+    }
+}
+```
+
+<Warning>
+  `SaleRepository.makeSale` runs inside a Room database transaction. If any product has insufficient stock, the entire transaction is rolled back and `finalizeSale` emits an error message.
+</Warning>
+
+---
+
+## SaleRepository
+
+```kotlin
+class SaleRepository(
+    private val db: AppDatabase,
+    private val saleDao: SaleDao,
+    private val productDao: ProductDao
+)
+```
+
+### makeSale
+
+```kotlin
+suspend fun makeSale(cart: List<CartItem>): Long
+```
+
+Executes the sale in a single `db.withTransaction` block:
+
+1. Calls `ProductDao.decreaseStock` for each cart item. Throws `IllegalStateException` if any item has insufficient stock.
+2. Inserts the `Sale` header via `SaleDao.insertSale`.
+3. Inserts all `SaleDetail` rows via `SaleDao.insertDetails`.
+4. Returns the generated sale ID.
+
+Throws `IllegalArgumentException("Carrito vacío")` if the cart is empty.
+
+### Other methods
+
+| Method | Return type | Description |
+|---|---|---|
+| `observeSales()` | `Flow<List<SaleWithDetails>>` | Passes through `SaleDao.observeSales()`. |
+| `getWeeklySalesSummary(timestamp)` | `Flow<List<DailySaleSummary>>` | Passes through `SaleDao.getWeeklySalesSummary(timestamp)`. |

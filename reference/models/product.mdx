@@ -1,0 +1,153 @@
+---
+title: Product
+description: Room entity, DAO interface, and field reference for the Product model.
+---
+
+The `Product` entity represents an item in the store inventory. It is stored in the `producto` table.
+
+## Entity definition
+
+```kotlin
+@Entity(
+    tableName = "producto",
+    indices = [
+        Index(value = ["code"], unique = true),
+        Index(value = ["category_id"])
+    ],
+    foreignKeys = [
+        ForeignKey(
+            entity = Category::class,
+            parentColumns = ["id"],
+            childColumns = ["category_id"],
+            onDelete = ForeignKey.SET_NULL
+        )
+    ]
+)
+data class Product(
+    @PrimaryKey(autoGenerate = true) val id: Int = 0,
+    val name: String,
+    val code: String,
+    val price: Double,
+    val stock: Int,
+    val descripcion: String,
+    @ColumnInfo(name = "category_id") val categoryId: Long? = null
+)
+```
+
+## Fields
+
+<ParamField path="id" type="Int" required>
+  Auto-generated primary key. Defaults to `0` on insert, replaced by Room with the generated row ID.
+</ParamField>
+
+<ParamField path="name" type="String" required>
+  Human-readable product name.
+</ParamField>
+
+<ParamField path="code" type="String" required>
+  Product SKU or barcode. Must be unique across all products (enforced by a unique index). Used as the identifier for upsert and lookup operations.
+</ParamField>
+
+<ParamField path="price" type="Double" required>
+  Retail sale price per unit.
+</ParamField>
+
+<ParamField path="stock" type="Int" required>
+  Current quantity on hand.
+</ParamField>
+
+<ParamField path="descripcion" type="String" required>
+  Text description or notes for the product.
+</ParamField>
+
+<ParamField path="categoryId" type="Long?" default="null">
+  Foreign key to `Category.id` (column `category_id`). Nullable. When the referenced category is deleted, this field is set to `NULL` (`ForeignKey.SET_NULL`).
+</ParamField>
+
+<Note>
+  The `code` field has a unique index. Inserting a product with a duplicate code using `insertIgnore` will silently discard the row (returns `-1L`).
+</Note>
+
+## Indexes
+
+| Column | Unique |
+|---|---|
+| `code` | Yes |
+| `category_id` | No |
+
+## Foreign keys
+
+| Column | References | On delete |
+|---|---|---|
+| `category_id` | `categoria.id` | `SET_NULL` |
+
+---
+
+## ProductDao
+
+`ProductDao` is the Room DAO interface for all `producto` table operations.
+
+```kotlin
+@Dao
+interface ProductDao {
+
+    @Query("SELECT * FROM producto ORDER BY name ASC")
+    fun observeAllProducts(): Flow<List<Product>>
+
+    @Query("SELECT COUNT(*) FROM producto")
+    suspend fun countAll(): Int
+
+    @Delete suspend fun deleteProduct(product: Product)
+    @Update suspend fun updateProduct(product: Product)
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertIgnore(product: Product): Long
+
+    @Query("""
+        UPDATE producto
+        SET name = :name, price = :price, stock = :stock, descripcion = :desc
+        WHERE code = :code
+    """)
+    suspend fun updateByCode(name: String, price: Double, stock: Int, desc: String, code: String): Int
+
+    @Query("SELECT * FROM producto WHERE code = :code LIMIT 1")
+    suspend fun findByCode(code: String): Product?
+
+    @Query("UPDATE producto SET stock = stock - :qty WHERE id = :productId AND stock >= :qty")
+    suspend fun decreaseStock(productId: Int, qty: Int): Int
+
+    @Transaction
+    suspend fun upsertByCode(p: Product)
+
+    @Query("""
+        INSERT OR IGNORE INTO producto (code, name, price, stock, descripcion)
+        VALUES (:code, :name, :price, :stock, :desc)
+    """)
+    suspend fun insertIgnoreMinimal(
+        code: String,
+        name: String,
+        price: Double,
+        stock: Int,
+        desc: String
+    )
+}
+```
+
+### Method reference
+
+| Method | Return type | Description |
+|---|---|---|
+| `observeAllProducts()` | `Flow<List<Product>>` | Reactive stream of all products sorted by name ascending. |
+| `countAll()` | `Int` | Returns the total number of products in the table. |
+| `deleteProduct(product)` | `Unit` | Deletes the product row matching the entity's primary key. |
+| `updateProduct(product)` | `Unit` | Updates all columns of the matching product row. |
+| `insertIgnore(product)` | `Long` | Inserts the product, ignoring conflicts. Returns `-1L` if the `code` already exists. |
+| `updateByCode(name, price, stock, desc, code)` | `Int` | Updates `name`, `price`, `stock`, and `descripcion` for the row matching `code`. Returns the number of rows affected. |
+| `findByCode(code)` | `Product?` | Returns the first product matching `code`, or `null` if not found. |
+| `decreaseStock(productId, qty)` | `Int` | Decrements stock by `qty` only if current stock ≥ `qty`. Returns `0` if stock is insufficient (used to detect failures in sale transactions). |
+| `upsertByCode(p)` | `Unit` | `@Transaction` helper: calls `insertIgnore`; if it returns `-1L`, falls back to `updateByCode`. |
+| `insertIgnoreMinimal(code, name, price, stock, desc)` | `Unit` | Minimal insert for products created during purchase flow. Skips the `categoryId` column. |
+
+<Warning>
+  `decreaseStock` returns `0` when stock is insufficient. The sale transaction in `SaleRepository.makeSale` checks this return value and throws `IllegalStateException` to roll back the transaction if stock cannot be decremented.
+</Warning>

@@ -1,0 +1,224 @@
+---
+title: Sale
+description: Room entities, relations, projections, and DAO interface for sales data.
+---
+
+Sales data is split across two entities: `Sale` (the transaction header) and `SaleDetail` (the individual line items). The `SaleWithDetails` relation and `DailySaleSummary` projection are used for queries.
+
+## Sale entity
+
+Stored in the `venta` table.
+
+```kotlin
+@Entity(tableName = "venta")
+data class Sale(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val fecha: Long = System.currentTimeMillis(),
+    val total: Double
+)
+```
+
+<ParamField path="id" type="Long" required>
+  Auto-generated primary key.
+</ParamField>
+
+<ParamField path="fecha" type="Long" required>
+  Unix epoch timestamp in milliseconds. Defaults to `System.currentTimeMillis()` at insert time.
+</ParamField>
+
+<ParamField path="total" type="Double" required>
+  Total amount of the sale (sum of all line item subtotals).
+</ParamField>
+
+---
+
+## SaleDetail entity
+
+Stored in the `detalle_venta` table. Each row represents one product line in a sale.
+
+```kotlin
+@Entity(
+    tableName = "detalle_venta",
+    primaryKeys = ["sale_id", "product_id"],
+    foreignKeys = [
+        ForeignKey(
+            entity = Sale::class,
+            parentColumns = ["id"],
+            childColumns = ["sale_id"],
+            onDelete = ForeignKey.CASCADE
+        ),
+        ForeignKey(
+            entity = Product::class,
+            parentColumns = ["id"],
+            childColumns = ["product_id"],
+            onDelete = ForeignKey.RESTRICT
+        )
+    ],
+    indices = [Index("product_id")]
+)
+data class SaleDetail(
+    @ColumnInfo(name = "sale_id") val saleId: Long,
+    @ColumnInfo(name = "product_id") val productId: Int,
+    val cantidad: Int,
+    @ColumnInfo(name = "precio_unit") val precioUnit: Double,
+    val subtotal: Double
+)
+```
+
+<ParamField path="saleId" type="Long" required>
+  Part of the composite primary key. Foreign key to `venta.id`. When the parent sale is deleted, all its details are deleted via `CASCADE`.
+</ParamField>
+
+<ParamField path="productId" type="Int" required>
+  Part of the composite primary key. Foreign key to `producto.id`. Deletion of the product is `RESTRICT`ed while detail rows exist.
+</ParamField>
+
+<ParamField path="cantidad" type="Int" required>
+  Number of units sold in this line.
+</ParamField>
+
+<ParamField path="precioUnit" type="Double" required>
+  Unit price at the time of the sale (column `precio_unit`).
+</ParamField>
+
+<ParamField path="subtotal" type="Double" required>
+  Line total (`cantidad * precioUnit`).
+</ParamField>
+
+### Composite primary key and indexes
+
+| Primary key columns | Index on |
+|---|---|
+| `sale_id`, `product_id` | `product_id` |
+
+### Foreign keys
+
+| Column | References | On delete |
+|---|---|---|
+| `sale_id` | `venta.id` | `CASCADE` |
+| `product_id` | `producto.id` | `RESTRICT` |
+
+---
+
+## SaleWithDetails
+
+A Room relation that embeds a `Sale` and populates its `items` list using `@Relation`.
+
+```kotlin
+data class SaleWithDetails(
+    @Embedded val sale: Sale,
+    @Relation(
+        parentColumn = "id",
+        entityColumn = "sale_id",
+        entity = SaleDetail::class
+    )
+    val items: List<SaleDetail>
+)
+```
+
+Used in `SaleDao.observeSales()` which is annotated with `@Transaction` to guarantee a consistent read.
+
+---
+
+## DailySaleSummary
+
+A lightweight projection returned by the weekly summary query.
+
+```kotlin
+data class DailySaleSummary(
+    val saleDate: String,
+    val total: Double
+)
+```
+
+<ParamField path="saleDate" type="String" required>
+  Date string in `YYYY-MM-DD` format, derived from the `fecha` timestamp using SQLite's `DATE()` function with `localtime` modifier.
+</ParamField>
+
+<ParamField path="total" type="Double" required>
+  Sum of all sale totals for the date.
+</ParamField>
+
+---
+
+## SaleDao
+
+```kotlin
+@Dao
+interface SaleDao {
+    @Insert
+    suspend fun insertSale(sale: Sale): Long
+
+    @Insert
+    suspend fun insertDetails(details: List<SaleDetail>)
+
+    @Transaction
+    @Query("SELECT * FROM venta ORDER BY fecha DESC")
+    fun observeSales(): Flow<List<SaleWithDetails>>
+
+    @Query("""
+        SELECT
+            DATE(fecha / 1000, 'unixepoch', 'localtime') AS saleDate,
+            SUM(total) AS total
+        FROM venta
+        WHERE fecha >= :sevenDaysAgoTimestamp
+        GROUP BY saleDate
+        ORDER BY saleDate ASC
+    """)
+    fun getWeeklySalesSummary(sevenDaysAgoTimestamp: Long): Flow<List<DailySaleSummary>>
+
+    @Query("""
+        SELECT COUNT(*)
+        FROM venta
+        WHERE DATE(fecha / 1000, 'unixepoch', 'localtime') = DATE('now','localtime')
+    """)
+    fun todaySalesCount(): Flow<Int>
+
+    @Query("""
+        SELECT COALESCE(SUM(total), 0.0)
+        FROM venta
+        WHERE DATE(fecha / 1000, 'unixepoch', 'localtime') = DATE('now','localtime')
+    """)
+    fun todaySalesTotal(): Flow<Double>
+
+    @Query("""
+        SELECT COALESCE(SUM(d.cantidad), 0)
+        FROM detalle_venta d
+        INNER JOIN venta v ON v.id = d.sale_id
+        WHERE DATE(v.fecha / 1000, 'unixepoch', 'localtime') = DATE('now','localtime')
+    """)
+    fun todayUnitsSold(): Flow<Int>
+
+    @Query("""
+        SELECT v.id AS id, v.total AS total, v.fecha AS fecha
+        FROM venta v
+        ORDER BY v.fecha DESC
+        LIMIT 1
+    """)
+    fun lastSaleBrief(): Flow<SaleBrief?>
+
+    @Query("""
+        DELETE FROM venta
+        WHERE DATE(fecha / 1000, 'unixepoch', 'localtime') = DATE('now','localtime')
+    """)
+    suspend fun deleteTodaySales()
+}
+```
+
+### Method reference
+
+| Method | Return type | Description |
+|---|---|---|
+| `insertSale(sale)` | `Long` | Inserts a sale header and returns the generated row ID. |
+| `insertDetails(details)` | `Unit` | Bulk-inserts a list of `SaleDetail` rows. |
+| `observeSales()` | `Flow<List<SaleWithDetails>>` | Reactive stream of all sales with their line items, ordered newest first. Annotated `@Transaction`. |
+| `getWeeklySalesSummary(sevenDaysAgoTimestamp)` | `Flow<List<DailySaleSummary>>` | Daily sale totals for the last 7 days, grouped and ordered by date. |
+| `todaySalesCount()` | `Flow<Int>` | Number of sale transactions recorded today (local time). |
+| `todaySalesTotal()` | `Flow<Double>` | Sum of all sale totals today. Returns `0.0` when there are no sales. |
+| `todayUnitsSold()` | `Flow<Int>` | Total units sold today across all line items. |
+| `lastSaleBrief()` | `Flow<SaleBrief?>` | The most recent sale as a `SaleBrief` projection, or `null` if no sales exist. |
+| `deleteTodaySales()` | `Unit` | Deletes all sale records for today. Called during the daily cash closure reset. |
+
+<Note>
+  All date comparisons use SQLite's `localtime` modifier so that "today" is relative to the device's local timezone, not UTC.
+</Note>

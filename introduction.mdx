@@ -1,0 +1,71 @@
+---
+title: "Introduction"
+description: "Bodequita is an Android mobile app for managing a small store — sales, purchases, inventory, suppliers, and daily cash closure in one place."
+---
+
+## What is Bodequita?
+
+**Bodequita** is a fully offline Android application built for small store owners who need a simple, fast, and reliable way to run their business operations. Built with **Kotlin**, **Jetpack Compose**, and a local **Room** database, it works entirely on-device — no internet connection or cloud account required.
+
+<CardGroup cols={2}>
+  <Card title="Products" icon="box" href="/features/products">
+    Register, edit, and search products with categories and real-time stock tracking.
+  </Card>
+  <Card title="Sales" icon="shopping-cart" href="/features/sales">
+    Create sales orders with multiple items, auto-calculated totals, and a full history view.
+  </Card>
+  <Card title="Purchases" icon="truck" href="/features/purchases">
+    Record supplier purchases that automatically update your product stock.
+  </Card>
+  <Card title="Cash Closure" icon="coins" href="/features/cash-closure">
+    See daily income, expenses, and net profit with a single tap.
+  </Card>
+  <Card title="Dashboard" icon="chart-bar" href="/features/dashboard">
+    At-a-glance stats for sales totals, active products, and weekly trends.
+  </Card>
+  <Card title="Suppliers" icon="building" href="/features/suppliers">
+    Maintain a supplier directory and link it to your purchase records.
+  </Card>
+</CardGroup>
+
+## Tech stack
+
+| Layer | Technology |
+|---|---|
+| Language | Kotlin |
+| UI | Jetpack Compose + Material Design 3 |
+| Architecture | MVVM (ViewModel + Repository) |
+| Database | Room (SQLite) |
+| Navigation | Jetpack Navigation Compose |
+| Charts | Vico (compose-m3) |
+| Min SDK | API 25 (Android 7.1) |
+| Target SDK | API 36 |
+
+## Key highlights
+
+- **Fully offline** — all data is stored locally on the device using Room/SQLite
+- **MVVM architecture** — clean separation of UI, business logic, and data access
+- **Reactive UI** — screens update automatically via Kotlin `Flow` and `StateFlow`
+- **Material Design 3** — modern, accessible UI with light and dark theme support
+- **Modular design** — each business function (products, sales, purchases, etc.) is an independent screen with its own ViewModel and repository
+
+## Project structure
+
+```
+app/src/main/java/com/trabajo/minitienda/
+├── data/
+│   ├── dao/          # Room Data Access Objects
+│   ├── database/     # AppDatabase definition
+│   └── model/        # Entity & data classes
+├── repository/       # Repository layer (data abstraction)
+├── screens/          # Jetpack Compose screens
+├── ui/
+│   ├── components/   # Reusable Composables
+│   └── theme/        # Colors, Typography, Theme
+├── utils/            # ThemeManager and utilities
+└── viewmodel/        # ViewModels and their factories
+```
+
+<Note>
+Bodequita is designed for small local stores (bodegas) that operate without a reliable internet connection. All data lives on the device and is never sent to an external server.
+</Note>

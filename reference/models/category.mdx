@@ -1,0 +1,180 @@
+---
+title: Category and Movement
+description: Room entities and DAO interfaces for product categories and inventory movements.
+---
+
+This page covers two supporting models: `Category` (product classification) and `MovimientoInventario` (inventory audit trail).
+
+---
+
+## Category entity
+
+Stored in the `categoria` table.
+
+```kotlin
+@Entity(
+    tableName = "categoria",
+    indices = [Index(value = ["nombre"], unique = true)]
+)
+data class Category(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val nombre: String
+)
+```
+
+<ParamField path="id" type="Long" required>
+  Auto-generated primary key.
+</ParamField>
+
+<ParamField path="nombre" type="String" required>
+  Category name. Must be unique (enforced by a unique index).
+</ParamField>
+
+### Indexes
+
+| Column | Unique |
+|---|---|
+| `nombre` | Yes |
+
+---
+
+## CategoryDao
+
+```kotlin
+@Dao
+interface CategoryDao {
+
+    @Query("SELECT * FROM categoria ORDER BY nombre ASC")
+    fun observeAll(): Flow<List<Category>>
+
+    @Query("SELECT * FROM categoria WHERE nombre = :nombre LIMIT 1")
+    suspend fun findByNombre(nombre: String): Category?
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertIgnore(c: Category): Long
+
+    @Query("UPDATE categoria SET nombre = :nuevo WHERE nombre = :anterior")
+    suspend fun updateByName(nuevo: String, anterior: String): Int
+
+    @Delete
+    suspend fun delete(category: Category)
+
+    @Query("DELETE FROM categoria WHERE id = :id")
+    suspend fun deleteById(id: Long): Int
+
+    @Transaction
+    suspend fun upsertByName(nombre: String): Long
+}
+```
+
+### Method reference
+
+| Method | Return type | Description |
+|---|---|---|
+| `observeAll()` | `Flow<List<Category>>` | Reactive stream of all categories sorted by name ascending. |
+| `findByNombre(nombre)` | `Category?` | Finds a category by exact name. Returns `null` if not found. |
+| `insertIgnore(c)` | `Long` | Inserts the category, ignoring conflicts on `nombre`. Returns `-1L` if already exists. |
+| `updateByName(nuevo, anterior)` | `Int` | Renames the category from `anterior` to `nuevo`. Returns rows affected. |
+| `delete(category)` | `Unit` | Deletes the category row matching the entity's primary key. |
+| `deleteById(id)` | `Int` | Deletes the category with the given `id`. Returns rows affected. |
+| `upsertByName(nombre)` | `Long` | `@Transaction` helper: inserts the category if the name does not exist; if it does, returns the existing category's `id`. |
+
+<Note>
+  When a category is deleted, any products that referenced it via `category_id` will have that field set to `NULL` due to the `SET_NULL` foreign key action on the `producto` table.
+</Note>
+
+---
+
+## MovimientoInventario entity
+
+Stored in the `movimiento_inventario` table. Records every stock change as an audit trail.
+
+```kotlin
+@Entity(
+    tableName = "movimiento_inventario",
+    indices = [Index("producto_id")],
+    foreignKeys = [
+        ForeignKey(
+            entity = Product::class,
+            parentColumns = ["id"],
+            childColumns = ["producto_id"],
+            onDelete = ForeignKey.CASCADE
+        )
+    ]
+)
+data class MovimientoInventario(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    @ColumnInfo(name = "producto_id") val productoId: Int,
+    val fecha: Long = System.currentTimeMillis(),
+    val tipo: String,
+    val cantidad: Int
+)
+```
+
+<ParamField path="id" type="Long" required>
+  Auto-generated primary key.
+</ParamField>
+
+<ParamField path="productoId" type="Int" required>
+  Foreign key to `producto.id` (column `producto_id`). When the product is deleted, all its movements are deleted via `CASCADE`.
+</ParamField>
+
+<ParamField path="fecha" type="Long" required>
+  Unix epoch timestamp in milliseconds. Defaults to `System.currentTimeMillis()`.
+</ParamField>
+
+<ParamField path="tipo" type="String" required>
+  Movement type. Valid values: `"AJUSTE"`, `"COMPRA"`, `"VENTA"`.
+</ParamField>
+
+<ParamField path="cantidad" type="Int" required>
+  Number of units involved in the movement.
+</ParamField>
+
+### Foreign keys
+
+| Column | References | On delete |
+|---|---|---|
+| `producto_id` | `producto.id` | `CASCADE` |
+
+---
+
+## MovementDao
+
+```kotlin
+@Dao
+interface MovementDao {
+
+    @Insert
+    suspend fun insertAll(items: List<MovimientoInventario>)
+
+    @Insert
+    suspend fun insert(item: MovimientoInventario)
+
+    @Query("""
+        SELECT * FROM movimiento_inventario
+        WHERE date(fecha/1000,'unixepoch') = date('now','unixepoch')
+        ORDER BY fecha DESC
+    """)
+    fun todayMovements(): Flow<List<MovimientoInventario>>
+
+    @Query("""
+        DELETE FROM movimiento_inventario
+        WHERE date(fecha/1000,'unixepoch') = date('now','unixepoch')
+    """)
+    suspend fun deleteTodayMovements()
+}
+```
+
+### Method reference
+
+| Method | Return type | Description |
+|---|---|---|
+| `insertAll(items)` | `Unit` | Bulk-inserts a list of movement records. |
+| `insert(item)` | `Unit` | Inserts a single movement record. |
+| `todayMovements()` | `Flow<List<MovimientoInventario>>` | Reactive stream of all movements recorded today, ordered newest first. |
+| `deleteTodayMovements()` | `Unit` | Deletes all movement records for today. Called during the daily cash closure reset. |
+
+<Tip>
+  `todayMovements()` is consumed by `CashClosureViewModel` to show a live inventory activity log during the cash closure review.
+</Tip>

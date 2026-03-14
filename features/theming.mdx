@@ -1,0 +1,167 @@
+---
+title: Theming
+description: Light and dark theme support, color palette, typography, and runtime theme switching in Bodequita.
+---
+
+Bodequita supports **light** and **dark** themes. The active theme is persisted across app restarts and can be toggled from the Profile screen.
+
+## ThemeManager
+
+`ThemeManager` is the single source of truth for the current theme preference. It is instantiated in `MainActivity` and passed down through `MainNavigation` to the `ProfileScreen`.
+
+```kotlin
+class ThemeManager(context: Context) {
+    private val prefs = context.getSharedPreferences("mini_tienda_theme", Context.MODE_PRIVATE)
+    private val THEME_KEY = "is_dark_theme"
+
+    private val _isDarkTheme = MutableStateFlow(getSavedTheme())
+    val isDarkTheme: StateFlow<Boolean> = _isDarkTheme.asStateFlow()
+
+    private fun getSavedTheme(): Boolean {
+        return prefs.getBoolean(THEME_KEY, false) // false = light theme by default
+    }
+
+    fun toggleTheme() {
+        val newTheme = !_isDarkTheme.value
+        _isDarkTheme.value = newTheme
+        prefs.edit().putString(THEME_KEY, newTheme.toString()).apply()
+    }
+
+    fun setTheme(isDark: Boolean) {
+        _isDarkTheme.value = isDark
+        prefs.edit().putBoolean(THEME_KEY, isDark).apply()
+    }
+}
+```
+
+**Persistence mechanism:** `SharedPreferences` file `mini_tienda_theme`, key `is_dark_theme` (Boolean). The default value is `false` (light theme).
+
+The `isDarkTheme` `StateFlow` is collected in `MainActivity` and passed as the `darkTheme` parameter to `MiniTiendaTheme`.
+
+<Note>
+  `toggleTheme()` uses `putString` while `setTheme()` uses `putBoolean`. Both methods update the in-memory `StateFlow` immediately so the UI reacts without requiring an app restart.
+</Note>
+
+## Theme composable
+
+`MiniTiendaTheme` wraps `MaterialTheme` and selects the correct color scheme based on the `darkTheme` parameter:
+
+```kotlin
+@Composable
+fun MiniTiendaTheme(
+    darkTheme: Boolean = isSystemInDarkTheme(),
+    content: @Composable () -> Unit
+) {
+    val colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme
+    val view = LocalView.current
+
+    if (!view.isInEditMode) {
+        SideEffect {
+            val window = (view.context as Activity).window
+            window.statusBarColor = colorScheme.primary.toArgb()
+            WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = !darkTheme
+        }
+    }
+
+    MaterialTheme(
+        colorScheme = colorScheme,
+        typography = Typography,
+        content = content
+    )
+}
+```
+
+The status bar color and icon appearance are updated via `SideEffect` whenever the theme changes.
+
+## Color palette
+
+### Brand colors
+
+<Color variant="table">
+  <Color.Row title="Brand">
+    <Color.Item name="PrimaryGreen" value="#16A34A" />
+    <Color.Item name="PrimaryGreenHover" value="#22C55E" />
+  </Color.Row>
+  <Color.Row title="Backgrounds">
+    <Color.Item name="BackgroundStart" value="#FAFAF8" />
+    <Color.Item name="BackgroundEnd" value="#F5F5F4" />
+    <Color.Item name="CardBackground" value="#FFFFFF" />
+    <Color.Item name="SecondaryBackground" value="#F5F5F0" />
+    <Color.Item name="SecondaryBackgroundAlt" value="#F0F4ED" />
+    <Color.Item name="InputBackground" value="#F9FAF8" />
+  </Color.Row>
+  <Color.Row title="Text">
+    <Color.Item name="PrimaryText" value="#1A1F16" />
+    <Color.Item name="SecondaryText" value="#6B7164" />
+  </Color.Row>
+  <Color.Row title="Status">
+    <Color.Item name="WarningColor" value="#F97316" />
+    <Color.Item name="WarningColorDark" value="#EA580C" />
+    <Color.Item name="ErrorColor" value="#DC2626" />
+    <Color.Item name="SuccessColor" value="#16A34A" />
+  </Color.Row>
+  <Color.Row title="Charts">
+    <Color.Item name="ChartGreen1" value="#16A34A" />
+    <Color.Item name="ChartGreen2" value="#22C55E" />
+    <Color.Item name="ChartGreen3" value="#4ADE80" />
+    <Color.Item name="ChartGreen4" value="#86EFAC" />
+    <Color.Item name="ChartGreen5" value="#BBF7D0" />
+  </Color.Row>
+</Color>
+
+### Light color scheme
+
+| Role | Token |
+|---|---|
+| `primary` | `PrimaryGreen` (#16A34A) |
+| `secondary` | `PrimaryGreenHover` (#22C55E) |
+| `background` | `BackgroundStart` (#FAFAF8) |
+| `surface` | `CardBackground` (#FFFFFF) |
+| `error` | `ErrorColor` (#DC2626) |
+| `onPrimary` | `CardBackground` (#FFFFFF) |
+| `onBackground` / `onSurface` | `PrimaryText` (#1A1F16) |
+
+### Dark color scheme
+
+| Role | Value |
+|---|---|
+| `primary` | #66BB6A |
+| `secondary` | #81C784 |
+| `background` | #121212 |
+| `surface` | #1E1E1E |
+| `error` | #EF5350 |
+| `onBackground` / `onSurface` | #E0E0E0 |
+| `onPrimary` | #1A1A1A |
+
+## Typography
+
+All type styles use the system default `FontFamily`. The custom `Typography` object defines the following styles:
+
+| Token | Weight | Size | Line height | Usage |
+|---|---|---|---|---|
+| `displayLarge` | Medium | 32 sp | 48 sp | Page titles |
+| `displayMedium` | Medium | 28 sp | 42 sp | Section titles |
+| `displaySmall` | Medium | 24 sp | 36 sp | Card titles |
+| `headlineMedium` | Medium | 16 sp | 24 sp | Subsection titles |
+| `bodyLarge` | Normal | 16 sp | 24 sp | Body text |
+| `bodySmall` | Normal | 14 sp | 20 sp | Metadata and descriptions |
+| `labelLarge` | Medium | 16 sp | 24 sp | Labels |
+| `labelMedium` | Medium | 16 sp | 24 sp | Button text |
+
+## Switching the theme from the Profile screen
+
+The `ProfileScreen` receives the `ThemeManager` instance and collects `isDarkTheme` as state:
+
+```kotlin
+ProfileScreen(
+    navController,
+    onMenuClick = openDrawer,
+    themeManager = themeManager
+)
+```
+
+Inside the screen, collecting the flow and calling `themeManager.toggleTheme()` from a switch or button is sufficient to persist and apply the change immediately across all recompositions that observe `MiniTiendaTheme`.
+
+<Tip>
+  Because `ThemeManager.isDarkTheme` is a `StateFlow`, any composable that calls `themeManager.isDarkTheme.collectAsState()` will automatically recompose when the theme changes — no manual invalidation is needed.
+</Tip>

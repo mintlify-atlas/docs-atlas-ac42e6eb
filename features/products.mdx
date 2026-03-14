@@ -1,0 +1,136 @@
+---
+title: Products
+description: The Products module lets you build and maintain your product catalog — add items, assign categories, track stock, and edit or remove products at any time.
+---
+
+The Products module consists of two screens: the product list and the product registration form. Together they cover the full lifecycle of a product in Bodequita.
+
+## Product list screen
+
+The list screen shows all products registered in your store. At the top of the screen a search bar lets you filter by **name**, **product code**, or **description** in real time — results update with every keystroke and are cleared with the ✕ button.
+
+Each product card shows:
+
+- Product name and code
+- Selling price (e.g. `S/ 5.50`)
+- Current stock count
+- A color-coded **stock badge**:
+  - Green `Disponible` — 10 or more units
+  - Amber `Stock Bajo` — 1 to 9 units
+  - Red `Sin Stock` — 0 units
+
+The actions row above the list shows the result count and a **Nuevo Producto** button.
+
+<Note>
+Searching matches against name, code, and description simultaneously. You can search by a partial product code such as `P00` to find all products in that code series.
+</Note>
+
+## Product registration form
+
+Tapping **Nuevo Producto** or the edit icon on any existing product card opens the registration form. The form contains the following fields:
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| Nombre del Producto | Text | Yes | Auto-capitalizes first letter |
+| Código | Text | Yes | Stored in uppercase (e.g. `P001`) |
+| Categoría | Dropdown / text | No | Select from existing or create a new one inline |
+| Precio (S/) | Decimal | Yes | Accepts comma or period as decimal separator |
+| Stock Inicial | Integer | Yes | Starting stock units |
+| Descripción | Multi-line text | No | Free-form product notes |
+
+The form validates inputs before saving: name, code, price, and stock must all be filled with valid values or a snackbar error is shown.
+
+## Product data model
+
+```kotlin
+@Entity(
+    tableName = "producto",
+    indices = [
+        Index(value = ["code"], unique = true),
+        Index(value = ["category_id"])
+    ],
+    foreignKeys = [
+        ForeignKey(
+            entity = Category::class,
+            parentColumns = ["id"],
+            childColumns = ["category_id"],
+            onDelete = ForeignKey.SET_NULL
+        )
+    ]
+)
+data class Product(
+    @PrimaryKey(autoGenerate = true) val id: Int = 0,
+    val name: String,
+    val code: String,
+    val price: Double,
+    val stock: Int,
+    val descripcion: String,
+    @ColumnInfo(name = "category_id") val categoryId: Long? = null
+)
+```
+
+Product codes must be unique. If a product with the same code already exists, the form performs an upsert — updating the existing record rather than creating a duplicate.
+
+## How to create a new product
+
+<Steps>
+  <Step title="Open the Products screen">
+    Tap **Productos** from the Dashboard quick-access cards or from the side menu.
+  </Step>
+  <Step title="Tap Nuevo Producto">
+    The button is in the top-right of the actions row above the product list.
+  </Step>
+  <Step title="Fill in the product details">
+    Enter the product name, a unique code, and the selling price. Set the initial stock count and optionally add a description.
+  </Step>
+  <Step title="Assign a category (optional)">
+    Tap the category dropdown to select an existing category or type a new name. If the name does not match any existing category, a **Crear** option appears at the bottom of the dropdown — tap it to create the category on the spot.
+  </Step>
+  <Step title="Save the product">
+    Tap **Guardar Producto**. You are returned to the product list and the new product appears immediately.
+  </Step>
+</Steps>
+
+## How to edit an existing product
+
+Tap the pencil (edit) icon on any product card. The registration form opens with all fields pre-filled with the existing data. Modify the fields you want to change and tap **Guardar Producto**. Because products are saved by an upsert on the code, the existing record is updated in place.
+
+## Deleting a product
+
+Tap the trash icon on any product card to delete it. The deletion is immediate and cannot be undone from the UI.
+
+<Note>
+A product cannot be deleted if it is referenced by existing sale details. This is enforced at the database level by a `RESTRICT` foreign key on `detalle_venta.product_id`.
+</Note>
+
+## Stock management
+
+Stock is managed automatically by the app — you do not need to manually adjust the number after sales or purchases:
+
+- **Sales**: When you register a sale, the quantity of each product in the cart is deducted from its stock.
+- **Purchases**: When you confirm a purchase, the quantity of each product in the purchase order is added to its stock.
+
+You can set a manual initial stock value in the registration form when creating a new product.
+
+## Categories
+
+Categories are managed separately from products. You can:
+
+- Select an existing category from the dropdown in the product form
+- Create a new category inline from the dropdown by typing a name that does not exist yet
+- Tap **Administrar categorías** in the product form to open the category manager dialog, where you can add new categories or delete existing ones
+
+When a category is deleted, its products are not deleted — the `categoryId` on those products is set to `null` (`ON DELETE SET NULL`).
+
+<Tip>
+Use consistent category names (e.g. `Abarrotes`, `Bebidas`, `Limpieza`) to make product filtering and reporting easier as your catalog grows.
+</Tip>
+
+<CardGroup cols={2}>
+  <Card title="Sales" icon="shopping-cart" href="/features/sales">
+    Learn how sales automatically decrement product stock.
+  </Card>
+  <Card title="Purchases" icon="trending-up" href="/features/purchases">
+    Learn how purchases automatically increment product stock.
+  </Card>
+</CardGroup>

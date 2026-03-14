@@ -1,0 +1,124 @@
+---
+title: Purchases
+description: The Purchases module lets you record stock replenishment orders from suppliers, automatically updating product inventory when a purchase is confirmed.
+---
+
+The Purchases screen covers the full workflow for receiving stock: select a supplier, add products with quantities and unit costs, review the total, then confirm. On confirmation the stock of every product in the order is incremented.
+
+## Screen overview
+
+The screen is a single scrollable form with four sections:
+
+1. **Proveedor** — Supplier selector and a shortcut to the supplier manager dialog
+2. **Agregar Productos** — Input fields to add product lines to the draft order
+3. **Productos en la Compra** — Review of current draft lines with delete controls
+4. **Resumen y acciones** — Total cost and the Registrar / Cancelar buttons
+
+## How to register a purchase
+
+<Steps>
+  <Step title="Open the Purchases screen">
+    Tap **Compras** from the Dashboard quick-access cards or from the side menu.
+  </Step>
+  <Step title="Select a supplier">
+    Tap the **Proveedor** dropdown and choose the supplier you are buying from. If the supplier is not listed, tap **Gestionar** to open the supplier manager and add them.
+  </Step>
+  <Step title="Add products to the order">
+    Enter the product name or code in the **Nombre o Código** field, set the **Cantidad** (quantity), and enter the **Costo (S/)** per unit. Tap **Agregar** to add the line. Repeat for each product you are receiving.
+  </Step>
+  <Step title="Review the draft order">
+    The **Productos en la Compra** section lists every line with its quantity, unit cost, and line total. Tap the trash icon on any line to remove it.
+  </Step>
+  <Step title="Confirm the purchase">
+    Tap **Registrar compra**. A snackbar confirms the purchase ID, the draft cart is cleared, and you are returned to the previous screen. Every product's stock is incremented by the quantity in the order.
+  </Step>
+</Steps>
+
+Tap **Cancelar** to clear the draft cart without saving.
+
+## Automatic stock update
+
+When a purchase is confirmed, the `PurchasesViewModel.finalizeDraftPurchase` method processes each draft line:
+
+1. It looks up the product by code (`productDao.findByCode`)
+2. If the product does not yet exist in the catalog, it is created automatically with the purchase cost as the reference price and a starting stock of 0
+3. Each line is passed to `PurchaseRepository.makePurchase`, which inserts the `Purchase` header, inserts a `PurchaseDetail` row for each line, and increments each product's stock — all in a single database transaction
+
+<Note>
+Products that do not exist in the catalog at the time of purchase are created automatically with minimal data (code, name, cost). You can edit them later in the Products screen to add a description, set the selling price, and assign a category.
+</Note>
+
+## Purchase data model
+
+```kotlin
+@Entity(tableName = "compra")
+data class Purchase(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    @ColumnInfo(name = "proveedor_id") val proveedorId: Int,
+    val fecha: Long = System.currentTimeMillis(),
+    val total: Double
+)
+
+@Entity(
+    tableName = "detalle_compra",
+    primaryKeys = ["purchase_id", "product_id"],
+    foreignKeys = [
+        ForeignKey(
+            entity = Purchase::class,
+            parentColumns = ["id"],
+            childColumns = ["purchase_id"],
+            onDelete = ForeignKey.CASCADE
+        ),
+        ForeignKey(
+            entity = Product::class,
+            parentColumns = ["id"],
+            childColumns = ["product_id"],
+            onDelete = ForeignKey.RESTRICT
+        )
+    ],
+    indices = [Index("product_id")]
+)
+data class PurchaseDetail(
+    @ColumnInfo(name = "purchase_id") val purchaseId: Long,
+    @ColumnInfo(name = "product_id") val productId: Int,
+    val cantidad: Int,
+    @ColumnInfo(name = "costo_unit") val costoUnit: Double,
+    val subtotal: Double = cantidad * costoUnit
+)
+```
+
+The `PurchaseWithDetails` relation is used for history read queries:
+
+```kotlin
+data class PurchaseWithDetails(
+    @Embedded val compra: Purchase,
+    @Relation(
+        parentColumn = "id",
+        entityColumn = "purchase_id",
+        entity = PurchaseDetail::class
+    )
+    val detalles: List<PurchaseDetail>
+)
+```
+
+Deleting a `Purchase` cascades to its `PurchaseDetail` rows. The `proveedor_id` field links every purchase to a supplier record.
+
+## ViewModel state
+
+The `PurchasesViewModel` exposes:
+
+| State | Type | Description |
+|---|---|---|
+| `suppliers` | `StateFlow<List<Supplier>>` | Reactive list of all suppliers for the dropdown |
+| `draftCart` | `StateFlow<List<DraftLine>>` | Current draft order lines |
+| `draftTotal` | `StateFlow<Double>` | Running total cost of the draft order |
+| `events` | `SharedFlow<String>` | Snackbar messages for errors and confirmations |
+
+<CardGroup cols={2}>
+  <Card title="Suppliers" icon="truck" href="/features/suppliers">
+    Create and manage the suppliers linked to your purchases.
+  </Card>
+  <Card title="Cash closure" icon="wallet" href="/features/cash-closure">
+    Purchases feed into the daily expenses total in the cash closure.
+  </Card>
+</CardGroup>

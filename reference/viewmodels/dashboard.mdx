@@ -1,0 +1,81 @@
+---
+title: DashboardViewModel
+description: ViewModel and factory reference for the dashboard, which aggregates today's sales activity.
+---
+
+`DashboardViewModel` aggregates key performance metrics for the current day by subscribing directly to `SaleDao` queries. It has no write operations.
+
+## Constructor
+
+```kotlin
+class DashboardViewModel(private val saleDao: SaleDao) : ViewModel()
+```
+
+<ParamField path="saleDao" type="SaleDao" required>
+  Provides the reactive queries for today's sales metrics and the last sale summary.
+</ParamField>
+
+## Factory
+
+```kotlin
+class DashboardViewModelFactory(
+    private val saleDao: SaleDao
+) : ViewModelProvider.Factory {
+    @Suppress("UNCHECKED_CAST")
+    override fun <T : ViewModel> create(modelClass: Class<T>): T {
+        if (modelClass.isAssignableFrom(DashboardViewModel::class.java)) {
+            return DashboardViewModel(saleDao) as T
+        }
+        throw IllegalArgumentException("Unknown ViewModel class")
+    }
+}
+```
+
+## State properties
+
+```kotlin
+val todaySalesCount: StateFlow<Int> =
+    saleDao.todaySalesCount()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
+
+val todayUnitsSold: StateFlow<Int> =
+    saleDao.todayUnitsSold()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
+
+val lastSaleBrief: StateFlow<SaleBrief?> =
+    saleDao.lastSaleBrief()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+```
+
+| Property | Type | Initial value | Description |
+|---|---|---|---|
+| `todaySalesCount` | `StateFlow<Int>` | `0` | Number of sale transactions recorded today (local time). Sourced from `SaleDao.todaySalesCount()`. |
+| `todayUnitsSold` | `StateFlow<Int>` | `0` | Total units sold today across all line items. Sourced from `SaleDao.todayUnitsSold()`. |
+| `lastSaleBrief` | `StateFlow<SaleBrief?>` | `null` | The most recent sale as a lightweight `SaleBrief` projection. `null` when no sales exist. Sourced from `SaleDao.lastSaleBrief()`. |
+
+### SaleBrief
+
+```kotlin
+data class SaleBrief(
+    val id: Long,
+    val total: Double,
+    val fecha: Long
+) {
+    val fechaString: String
+        get() {
+            if (fecha == 0L) return "-"
+            val df = SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault())
+            return df.format(Date(fecha))
+        }
+}
+```
+
+`SaleBrief` is a lightweight projection of the `venta` table. The computed property `fechaString` formats `fecha` as `dd/MM/yyyy HH:mm` using the device locale. Returns `"-"` when `fecha` is `0L`.
+
+<Note>
+  All three `StateFlow` properties use `SharingStarted.WhileSubscribed(5_000)`, meaning the upstream Room `Flow` is kept active for 5 seconds after the last collector unsubscribes. This prevents unnecessary database queries when the user briefly navigates away from the dashboard.
+</Note>
+
+<Tip>
+  `DashboardScreen` also receives `salesViewModel` for weekly chart data (`weeklySales`) and `productViewModel` for the product count. `DashboardViewModel` focuses only on today's transaction metrics.
+</Tip>

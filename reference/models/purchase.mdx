@@ -1,0 +1,179 @@
+---
+title: Purchase
+description: Room entities, relations, and DAO interface for purchase (stock restocking) data.
+---
+
+Purchases record stock replenishment transactions. The data is split between the `Purchase` header entity and `PurchaseDetail` line items.
+
+## Purchase entity
+
+Stored in the `compra` table.
+
+```kotlin
+@Entity(tableName = "compra")
+data class Purchase(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    @ColumnInfo(name = "proveedor_id") val proveedorId: Int,
+    val fecha: Long = System.currentTimeMillis(),
+    val total: Double
+)
+```
+
+<ParamField path="id" type="Long" required>
+  Auto-generated primary key.
+</ParamField>
+
+<ParamField path="proveedorId" type="Int" required>
+  ID of the supplier (column `proveedor_id`). References the `proveedor` table.
+</ParamField>
+
+<ParamField path="fecha" type="Long" required>
+  Unix epoch timestamp in milliseconds. Defaults to `System.currentTimeMillis()`.
+</ParamField>
+
+<ParamField path="total" type="Double" required>
+  Total cost of the purchase (sum of all line item subtotals).
+</ParamField>
+
+---
+
+## PurchaseDetail entity
+
+Stored in the `detalle_compra` table. Each row represents one product line in a purchase.
+
+```kotlin
+@Entity(
+    tableName = "detalle_compra",
+    primaryKeys = ["purchase_id", "product_id"],
+    foreignKeys = [
+        ForeignKey(
+            entity = Purchase::class,
+            parentColumns = ["id"],
+            childColumns = ["purchase_id"],
+            onDelete = ForeignKey.CASCADE
+        ),
+        ForeignKey(
+            entity = Product::class,
+            parentColumns = ["id"],
+            childColumns = ["product_id"],
+            onDelete = ForeignKey.RESTRICT
+        )
+    ],
+    indices = [Index("product_id")]
+)
+data class PurchaseDetail(
+    @ColumnInfo(name = "purchase_id") val purchaseId: Long,
+    @ColumnInfo(name = "product_id") val productId: Int,
+    val cantidad: Int,
+    @ColumnInfo(name = "costo_unit") val costoUnit: Double,
+    val subtotal: Double = cantidad * costoUnit
+)
+```
+
+<ParamField path="purchaseId" type="Long" required>
+  Part of the composite primary key. Foreign key to `compra.id`. Cascades on delete.
+</ParamField>
+
+<ParamField path="productId" type="Int" required>
+  Part of the composite primary key. Foreign key to `producto.id`. Deletion is `RESTRICT`ed.
+</ParamField>
+
+<ParamField path="cantidad" type="Int" required>
+  Number of units purchased in this line.
+</ParamField>
+
+<ParamField path="costoUnit" type="Double" required>
+  Unit cost at the time of the purchase (column `costo_unit`).
+</ParamField>
+
+<ParamField path="subtotal" type="Double" required>
+  Line total. Defaults to `cantidad * costoUnit` at construction time.
+</ParamField>
+
+### Composite primary key and indexes
+
+| Primary key columns | Index on |
+|---|---|
+| `purchase_id`, `product_id` | `product_id` |
+
+### Foreign keys
+
+| Column | References | On delete |
+|---|---|---|
+| `purchase_id` | `compra.id` | `CASCADE` |
+| `product_id` | `producto.id` | `RESTRICT` |
+
+---
+
+## PurchaseWithDetails
+
+A Room relation that embeds a `Purchase` and populates its `detalles` list.
+
+```kotlin
+data class PurchaseWithDetails(
+    @Embedded val compra: Purchase,
+    @Relation(
+        parentColumn = "id",
+        entityColumn = "purchase_id",
+        entity = PurchaseDetail::class
+    )
+    val detalles: List<PurchaseDetail>
+)
+```
+
+Returned by `PurchaseDao.observePurchases()`, which is annotated with `@Transaction`.
+
+---
+
+## PurchaseDao
+
+```kotlin
+@Dao
+interface PurchaseDao {
+
+    @Insert
+    suspend fun insertPurchase(p: Purchase): Long
+
+    @Insert
+    suspend fun insertDetails(details: List<PurchaseDetail>)
+
+    @Transaction
+    @Query("SELECT * FROM compra ORDER BY fecha DESC")
+    fun observePurchases(): Flow<List<PurchaseWithDetails>>
+
+    @Query("""
+        SELECT COALESCE(SUM(total), 0.0)
+        FROM compra
+        WHERE DATE(fecha / 1000, 'unixepoch', 'localtime') = DATE('now','localtime')
+    """)
+    fun todayPurchasesTotal(): Flow<Double>
+
+    @Query("""
+        SELECT COUNT(*)
+        FROM compra
+        WHERE DATE(fecha / 1000, 'unixepoch', 'localtime') = DATE('now','localtime')
+    """)
+    fun todayPurchasesCount(): Flow<Int>
+
+    @Query("""
+        DELETE FROM compra
+        WHERE DATE(fecha / 1000, 'unixepoch', 'localtime') = DATE('now','localtime')
+    """)
+    suspend fun deleteTodayPurchases()
+}
+```
+
+### Method reference
+
+| Method | Return type | Description |
+|---|---|---|
+| `insertPurchase(p)` | `Long` | Inserts a purchase header and returns the generated row ID. |
+| `insertDetails(details)` | `Unit` | Bulk-inserts a list of `PurchaseDetail` rows. |
+| `observePurchases()` | `Flow<List<PurchaseWithDetails>>` | Reactive stream of all purchases with their line items, ordered newest first. Annotated `@Transaction`. |
+| `todayPurchasesTotal()` | `Flow<Double>` | Sum of all purchase totals today (local time). Returns `0.0` when there are no purchases. |
+| `todayPurchasesCount()` | `Flow<Int>` | Number of purchase transactions recorded today. |
+| `deleteTodayPurchases()` | `Unit` | Deletes all purchase records for today. Called during the daily cash closure reset. |
+
+<Note>
+  `PurchaseRepository.makePurchase` does not use a Room `@Transaction` annotation — it uses `withContext(Dispatchers.IO)` and calls the DAO methods sequentially. Stock is incremented after the detail rows are inserted.
+</Note>

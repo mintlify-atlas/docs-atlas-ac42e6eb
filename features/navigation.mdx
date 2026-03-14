@@ -1,0 +1,138 @@
+---
+title: Navigation
+description: How Bodequita uses a Modal Navigation Drawer and Jetpack Compose NavHost to route between screens.
+---
+
+Bodequita uses Jetpack Compose Navigation with a **Modal Navigation Drawer** (hamburger menu) as the primary navigation pattern. A single `NavHost` in `MainNavigation.kt` owns all routes in the app.
+
+## Navigation drawer
+
+The drawer is implemented with `ModalNavigationDrawer` and opens when the user taps the hamburger icon exposed by any screen via the `onMenuClick` callback. The drawer closes automatically when the user selects an item.
+
+The following items appear in the drawer:
+
+| Label | Route | Icon |
+|---|---|---|
+| Panel | `dashboard` | Dashboard |
+| Productos | `products` | Inventory |
+| Ventas | `sales` | ShoppingCart |
+| Compras | `purchases` | AddShoppingCart |
+| Cierre | `cash_closure` | AccountBalance |
+| Perfil | `profile` | Person |
+
+The currently active route is highlighted using `currentBackStackEntryAsState()`:
+
+```kotlin
+val navBackStackEntry by navController.currentBackStackEntryAsState()
+val currentRoute = navBackStackEntry?.destination?.route
+```
+
+Each drawer item calls `navController.navigate(item.route) { launchSingleTop = true }` so that navigating to an already-visible destination does not create a duplicate back-stack entry.
+
+## NavHost and routes
+
+The `NavHost` starts at the `login` route. After successful authentication, `LoginScreen` calls `navController.navigate("dashboard")` to enter the main app.
+
+```kotlin
+NavHost(navController = navController, startDestination = "login") {
+
+    composable("login") { LoginScreen(navController) }
+
+    composable("dashboard") {
+        DashboardScreen(
+            navController = navController,
+            productViewModel = productViewModel,
+            salesViewModel = salesViewModel,
+            dashboardViewModel = dashboardViewModel,
+            onMenuClick = openDrawer
+        )
+    }
+
+    composable("products") {
+        ProductListScreen(navController, productViewModel, onMenuClick = openDrawer)
+    }
+
+    composable(
+        route = "product_registration/{productId}",
+        arguments = listOf(navArgument("productId") { type = NavType.StringType })
+    ) { backStackEntry ->
+        val productId = backStackEntry.arguments?.getString("productId")?.toIntOrNull()
+        val products by productViewModel.products.collectAsState(initial = emptyList())
+        val product = productId?.let { id -> products.find { it.id == id } }
+
+        ProductRegistrationScreen(
+            navController, productViewModel, categoryViewModel, product,
+            onMenuClick = openDrawer
+        )
+    }
+
+    composable("product_registration") {
+        ProductRegistrationScreen(
+            navController, productViewModel, categoryViewModel,
+            onMenuClick = openDrawer
+        )
+    }
+
+    composable("sales") {
+        SalesScreen(navController, salesViewModel, onMenuClick = openDrawer)
+    }
+
+    composable("purchases") {
+        PurchasesScreen(
+            navController = navController,
+            purchasesVM = purchasesViewModel,
+            onMenuClick = openDrawer
+        )
+    }
+
+    composable("cash_closure") {
+        CashClosureScreen(navController, vm = cashClosureVM, onMenuClick = openDrawer)
+    }
+
+    composable("profile") {
+        ProfileScreen(
+            navController, onMenuClick = openDrawer, themeManager = themeManager
+        )
+    }
+}
+```
+
+### Complete route reference
+
+| Route | Screen | Notes |
+|---|---|---|
+| `login` | `LoginScreen` | Start destination |
+| `dashboard` | `DashboardScreen` | Redirected to after login |
+| `products` | `ProductListScreen` | Product catalog |
+| `product_registration` | `ProductRegistrationScreen` | Create new product |
+| `product_registration/{productId}` | `ProductRegistrationScreen` | Edit existing product |
+| `sales` | `SalesScreen` | Point-of-sale cart |
+| `purchases` | `PurchasesScreen` | Stock purchasing |
+| `cash_closure` | `CashClosureScreen` | Daily cash close |
+| `profile` | `ProfileScreen` | User preferences and theme |
+
+## Navigation arguments
+
+The `product_registration/{productId}` route accepts one optional argument:
+
+<ParamField path="productId" type="String">
+  The ID of the product to edit. The value is parsed to `Int` via `toIntOrNull()`. When `null`, the screen opens in create mode. Declared with `NavType.StringType`.
+</ParamField>
+
+<Note>
+  `productId` is typed as `String` in the nav argument declaration and converted to `Int` at the call site so that the route can be treated as optional — navigating to `product_registration` (without the argument segment) also works.
+</Note>
+
+## ViewModel instantiation
+
+`MainNavigation` is responsible for creating all ViewModels via their factories. The Room database is opened once using `produceState` and all repositories are wrapped in `remember` blocks to avoid recreation on recomposition:
+
+```kotlin
+val productViewModel: ProductViewModel = run {
+    val repository = remember { ProductRepository(db.productDao()) }
+    val factory = remember { ProductViewModelFactory(repository) }
+    viewModel(factory = factory)
+}
+```
+
+All ViewModels are shared across screens by passing instances as parameters, so state is preserved during navigation.

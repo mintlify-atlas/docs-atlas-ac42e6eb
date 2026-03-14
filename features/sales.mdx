@@ -1,0 +1,161 @@
+---
+title: Sales
+description: The Sales module lets you build a cart, validate stock, calculate totals, and confirm sales — with each completed transaction automatically updating your product inventory.
+---
+
+The Sales screen is where you register every customer transaction. Products are added to a cart, a live summary shows the subtotal, IGV, and total, and confirming the sale persists the record and decrements stock.
+
+## Screen layout
+
+The screen is split into two areas:
+
+- **Left / top pane** — Add products to the cart and review current cart lines
+- **Right / bottom pane** — Sale summary with totals and action buttons
+
+On wide screens (≥ 600 dp) both panes are displayed side by side. On narrow screens they stack vertically and scroll together.
+
+## Adding products to the cart
+
+You can add a product to the cart in two ways:
+
+1. **By name** — Start typing in the **Producto** dropdown field. The list filters to the first 12 matching products by name or code. Tap a result to select it; the code field is filled automatically.
+2. **By code** — Type or scan the product code directly into the **Código** field.
+
+Once a product is selected, set the **Cantidad** (quantity) field and tap **Agregar**. If the product is already in the cart, its quantity is incremented rather than a duplicate line being added.
+
+Each cart line shows:
+- Product name
+- Quantity × unit price
+- Line subtotal
+- A delete icon to remove the line
+
+## Sale summary
+
+The summary panel updates live as you modify the cart:
+
+| Row | Value |
+|---|---|
+| Productos | Number of distinct product lines in the cart |
+| Unidades | Total item count across all lines |
+| Subtotal | Sum of all line subtotals |
+| IGV (18%) | 18% tax applied to the subtotal |
+| **Total** | Subtotal + IGV |
+
+## Stock validation
+
+Before a product is added to the cart the app verifies that the code exists. If you enter a code that does not match any product a snackbar message appears: `"Código no encontrado"`. You cannot add a product with quantity ≤ 0.
+
+<Note>
+The current implementation validates that a product exists by code before adding it to the cart. Stock sufficiency (i.e. whether the requested quantity exceeds the available stock) is enforced at the repository layer when the sale is finalized.
+</Note>
+
+## How to register a sale
+
+<Steps>
+  <Step title="Open the Sales screen">
+    Tap **Ventas** from the Dashboard quick-access cards or from the side menu.
+  </Step>
+  <Step title="Add products to the cart">
+    Search for a product by name or enter its code, set the quantity, then tap **Agregar**. Repeat for each product in the sale.
+  </Step>
+  <Step title="Review the summary">
+    Check the cart lines and the totals in the summary panel. Remove any line you added by mistake by tapping the trash icon.
+  </Step>
+  <Step title="Confirm the sale">
+    Tap **Registrar Venta**. The cart is cleared, a snackbar confirms the sale ID (e.g. `"Venta realizada (#12)"`), and the stock of each product is decremented automatically.
+  </Step>
+</Steps>
+
+To discard the current cart without saving, tap **Cancelar**.
+
+## Sale data model
+
+A completed sale is stored across two related entities:
+
+```kotlin
+@Entity(tableName = "venta")
+data class Sale(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val fecha: Long = System.currentTimeMillis(),
+    val total: Double
+)
+
+@Entity(
+    tableName = "detalle_venta",
+    primaryKeys = ["sale_id", "product_id"],
+    foreignKeys = [
+        ForeignKey(
+            entity = Sale::class,
+            parentColumns = ["id"],
+            childColumns = ["sale_id"],
+            onDelete = ForeignKey.CASCADE
+        ),
+        ForeignKey(
+            entity = Product::class,
+            parentColumns = ["id"],
+            childColumns = ["product_id"],
+            onDelete = ForeignKey.RESTRICT
+        )
+    ],
+    indices = [Index("product_id")]
+)
+data class SaleDetail(
+    @ColumnInfo(name = "sale_id") val saleId: Long,
+    @ColumnInfo(name = "product_id") val productId: Int,
+    val cantidad: Int,
+    @ColumnInfo(name = "precio_unit") val precioUnit: Double,
+    val subtotal: Double
+)
+```
+
+The `SaleWithDetails` relation combines both for read queries:
+
+```kotlin
+data class SaleWithDetails(
+    @Embedded val sale: Sale,
+    @Relation(
+        parentColumn = "id",
+        entityColumn = "sale_id",
+        entity = SaleDetail::class
+    )
+    val items: List<SaleDetail>
+)
+```
+
+Deleting a `Sale` record cascades to its `SaleDetail` rows. A `SaleDetail` cannot be deleted if the referenced product is restricted — the product must be kept in the catalog as long as sale history exists for it.
+
+## How SalesViewModel processes a sale
+
+The `SalesViewModel` holds the cart as a `MutableStateFlow<List<CartItem>>`. When you tap **Registrar Venta**, `finalizeSale()` is called:
+
+```kotlin
+fun finalizeSale() = viewModelScope.launch {
+    try {
+        val id = repo.makeSale(_cart.value)
+        clearCart()
+        _events.tryEmit("Venta realizada (#$id)")
+    } catch (e: Exception) {
+        _events.tryEmit(e.message ?: "Error al registrar la venta")
+    }
+}
+```
+
+`SaleRepository.makeSale` runs the full transaction: it inserts the `Sale` header record, inserts a `SaleDetail` row for each cart line (with `precioUnit` and `subtotal`), and decrements each product's stock — all in a single database transaction. If anything fails, the exception message is surfaced as a snackbar.
+
+## ViewModel exposed state
+
+| State | Type | Description |
+|---|---|---|
+| `cart` | `StateFlow<List<CartItem>>` | Current cart lines (product + quantity) |
+| `total` | `StateFlow<Double>` | Live sum of all line subtotals |
+| `weeklySales` | `StateFlow<List<DailySaleSummary>>` | Last 7 days of daily totals (used by Dashboard chart) |
+| `events` | `SharedFlow<String>` | One-shot messages shown as snackbars |
+
+<CardGroup cols={2}>
+  <Card title="Products" icon="box" href="/features/products">
+    Understand how stock levels are managed.
+  </Card>
+  <Card title="Cash closure" icon="wallet" href="/features/cash-closure">
+    See how daily sales totals feed the cash closure summary.
+  </Card>
+</CardGroup>

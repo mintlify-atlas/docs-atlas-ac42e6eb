@@ -1,0 +1,125 @@
+---
+title: ProductViewModel
+description: ViewModel, factory, and repository reference for product management.
+---
+
+`ProductViewModel` manages the product list and exposes operations to create, update, and delete products. It is instantiated via `ProductViewModelFactory` and scoped to the nav graph in `MainNavigation`.
+
+## Constructor
+
+```kotlin
+class ProductViewModel(private val repository: ProductRepository) : ViewModel()
+```
+
+<ParamField path="repository" type="ProductRepository" required>
+  The data access layer for the `producto` table. See `ProductRepository` below.
+</ParamField>
+
+## Factory
+
+```kotlin
+class ProductViewModelFactory(private val repository: ProductRepository) : ViewModelProvider.Factory {
+    override fun <T : ViewModel> create(modelClass: Class<T>): T {
+        if (modelClass.isAssignableFrom(ProductViewModel::class.java)) {
+            @Suppress("UNCHECKED_CAST")
+            return ProductViewModel(repository) as T
+        }
+        throw IllegalArgumentException("Unknown ViewModel class")
+    }
+}
+```
+
+## State properties
+
+```kotlin
+val products: StateFlow<List<Product>> =
+    repository.observeAllProducts()
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = emptyList()
+        )
+
+val events: SharedFlow<String> = _events.asSharedFlow()
+```
+
+| Property | Type | Description |
+|---|---|---|
+| `products` | `StateFlow<List<Product>>` | Live list of all products sorted by name ascending. Backed by a Room `Flow` converted to `StateFlow` with a 5-second upstream subscription timeout. Initial value is an empty list. |
+| `events` | `SharedFlow<String>` | One-shot event stream for UI feedback messages (e.g. snackbar text). Emitted after save or error. |
+
+## Public methods
+
+```kotlin
+fun upsertProduct(product: Product): Job
+fun deleteProduct(product: Product): Job
+fun updateProduct(product: Product): Job
+```
+
+### upsertProduct
+
+```kotlin
+fun upsertProduct(product: Product) = viewModelScope.launch {
+    try {
+        repository.upsertByCode(product)
+        _events.tryEmit("Producto guardado")
+    } catch (e: Exception) {
+        _events.tryEmit("Error al guardar: ${e.message ?: "desconocido"}")
+    }
+}
+```
+
+Inserts the product if its `code` does not already exist, or updates the existing record if it does. Emits a success or error message on `events`.
+
+### deleteProduct
+
+```kotlin
+fun deleteProduct(product: Product) = viewModelScope.launch {
+    repository.deleteProduct(product)
+}
+```
+
+Deletes the product row matching the entity's `id`.
+
+### updateProduct
+
+```kotlin
+fun updateProduct(product: Product) = viewModelScope.launch {
+    repository.updateProduct(product)
+}
+```
+
+Updates all columns of the product matching the entity's `id`. Use this when you have the full entity and want to overwrite every field.
+
+<Note>
+  `upsertProduct` is the preferred method for the registration form. `updateProduct` is available for cases where the caller already holds the entity with a known `id` and wants a direct update without the upsert code-lookup.
+</Note>
+
+---
+
+## ProductRepository
+
+```kotlin
+class ProductRepository(private val productDao: ProductDao) {
+
+    fun observeAllProducts() = productDao.observeAllProducts()
+
+    suspend fun upsertByCode(p: Product) = productDao.upsertByCode(p)
+
+    suspend fun deleteProduct(p: Product) = productDao.deleteProduct(p)
+
+    suspend fun updateProduct(p: Product) = productDao.updateProduct(p)
+
+    suspend fun countAll(): Int = productDao.countAll()
+}
+```
+
+`ProductRepository` is a thin wrapper around `ProductDao`. It is constructed with a `ProductDao` instance and delegates all calls directly to the DAO.
+
+| Method | Description |
+|---|---|
+| `observeAllProducts()` | Returns the DAO's reactive `Flow<List<Product>>`. |
+| `upsertByCode(p)` | Delegates to `ProductDao.upsertByCode`. |
+| `deleteProduct(p)` | Delegates to `ProductDao.deleteProduct`. |
+| `updateProduct(p)` | Delegates to `ProductDao.updateProduct`. |
+| `countAll()` | Returns total product count. |

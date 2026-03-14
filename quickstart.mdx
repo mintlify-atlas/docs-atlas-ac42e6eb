@@ -1,80 +1,77 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: 'Quickstart'
+description: 'Set up the Bodequita development environment, build the app, and run through the core workflow for the first time.'
 ---
 
-## Get started in three steps
+## Prerequisites
 
-Get your documentation site running locally and make your first customization.
+Before you begin, make sure the following tools are installed:
 
-### Step 1: Set up your local environment
+- **Android Studio** Hedgehog (2023.1.1) or later
+- **JDK 17** — the project sets `sourceCompatibility = JavaVersion.VERSION_17` and `jvmTarget = "17"` in `app/build.gradle.kts`
+- **Android SDK** with API level 25 (Android 7.1 Nougat) or higher — `minSdk = 25`, `targetSdk = 36`
+- **Git**
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+<Steps>
+  <Step title="Clone the repository">
+    Open a terminal and clone the project:
 
-### Step 2: Deploy your changes
+    ```bash
+    git clone https://github.com/your-org/bodequita.git
+    cd bodequita
+    ```
+  </Step>
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+  <Step title="Open the project in Android Studio">
+    1. Launch Android Studio.
+    2. Select **File → Open** and navigate to the cloned directory.
+    3. Click **OK** and wait for the initial Gradle sync to complete.
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+    <Note>
+      Android Studio will automatically download all declared dependencies, including Room 2.6.1 and Vico 1.13.0, during the first sync. Make sure you have an active internet connection.
+    </Note>
+  </Step>
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+  <Step title="Configure an emulator or physical device">
+    The app targets API 25+. You can use either:
 
-### Step 3: Go live
+    - **Emulator**: In Android Studio, go to **Device Manager → Create Device** and choose a Pixel profile with an API 25+ system image.
+    - **Physical device**: Enable **USB Debugging** on your Android device (Settings → Developer Options) and connect via USB.
+  </Step>
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+  <Step title="Build the project">
+    From the Android Studio toolbar, select **Build → Make Project** (or press `Ctrl+F9` / `Cmd+F9`). You can also build from the command line:
 
-## Next steps
+    ```bash
+    ./gradlew assembleDebug
+    ```
 
-Now that you have your docs running, explore these key features:
+    The debug APK is output to `app/build/outputs/apk/debug/app-debug.apk`.
+  </Step>
 
-<CardGroup cols={2}>
+  <Step title="Run the app">
+    Press **Run** (the green play button) or use:
 
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
+    ```bash
+    ./gradlew installDebug
+    ```
 
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
+    The app launches on your selected device or emulator.
+  </Step>
 
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
+  <Step title="First launch walkthrough">
+    Follow this path through the app on first launch:
 
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
+    1. **Login screen** — The app starts at the `login` route. Enter any credentials to proceed to the main app (authentication is local).
+    2. **Dashboard** — You land on the dashboard (`dashboard` route), which shows today's sales totals, units sold, and the weekly sales chart. The chart will be empty until you record sales.
+    3. **Create your first product** — Open the navigation drawer (hamburger icon) and tap **Productos**. Tap the add button to navigate to `product_registration`. Fill in the product name, code, price, stock quantity, and optionally assign a category. Tap **Save**.
+    4. **Make your first sale** — From the drawer, tap **Ventas**. Enter the product code and quantity, then tap **Add to cart**. Review the cart total and tap **Finalize sale**. The sale is persisted in a Room transaction that also decrements the product's stock.
+  </Step>
+</Steps>
 
-</CardGroup>
+<Tip>
+  The Room database file is stored on-device at:
+  `data/data/com.trabajo.minitienda/databases/minitienda.db`
 
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>
+  You can inspect it during development using **Android Studio → App Inspection → Database Inspector** while the app is running on a connected device or emulator.
+</Tip>

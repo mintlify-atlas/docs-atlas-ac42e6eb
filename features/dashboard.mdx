@@ -1,0 +1,89 @@
+---
+title: Dashboard
+description: The Dashboard is your store's control panel — a real-time overview of today's sales activity, inventory health, and quick navigation to every core module.
+---
+
+The Dashboard is the first screen you see after opening Bodequita. It aggregates live data from your sales and product records into a single scrollable view so you can assess your store's status at a glance.
+
+## Stats grid
+
+Four metric cards are displayed at the top of the screen, each refreshed automatically as new data arrives.
+
+| Card | What it shows |
+|---|---|
+| **Ventas** | Number of sale transactions completed today |
+| **Unidades vendidas** | Total units (items) sold today across all transactions |
+| **Total productos** | Count of products currently registered in your inventory |
+| **Última venta — Monto** | Amount of the most recent sale, with its ID and timestamp |
+
+Each card shows a badge label (`Hoy`, `Inventario`, `Última venta`), a title, a helper line, and the computed value in large text.
+
+## Weekly activity chart
+
+Below the stats grid, the **Actividad Semanal** chart plots your total sales revenue for the last 7 days. The chart is built with the [Vico](https://github.com/patrykandpatrick/vico) charting library and is driven by `DailySaleSummary` records — one data point per calendar day, each containing the date string and the aggregated daily total.
+
+```kotlin
+data class DailySaleSummary(
+    val saleDate: String,
+    val total: Double
+)
+```
+
+The `SalesViewModel` loads the summary on startup by querying the last 6 days back from the current date and streaming the result as `weeklySales: StateFlow<List<DailySaleSummary>>`.
+
+## Low-stock banner
+
+When any product has fewer than 10 units in stock, a highlighted banner appears between the chart and the quick-access cards. It lists up to 3 of the lowest-stock products with their remaining quantities. A **Ver todos** button navigates directly to the Products screen.
+
+<Note>
+The low-stock threshold is 10 units. Products with 0 stock are shown as "Sin Stock" in the product list. The banner only appears when at least one product is below the threshold.
+</Note>
+
+## Quick-access cards
+
+Four tappable cards at the bottom of the screen let you navigate directly to each module without using the side menu.
+
+| Card | Destination |
+|---|---|
+| **Productos** | Product list and inventory management |
+| **Ventas** | New sale registration screen |
+| **Compras** | New purchase registration screen |
+| **Cierre de Caja** | Daily cash closure summary |
+
+Each card shows a badge, a title, a subtitle, and a green-tinted icon. Tapping anywhere on the card navigates to that route.
+
+## ViewModel state
+
+The `DashboardViewModel` exposes three reactive state flows sourced directly from the `SaleDao`:
+
+| State | Type | Description |
+|---|---|---|
+| `todaySalesCount` | `StateFlow<Int>` | Number of sale transactions recorded today |
+| `todayUnitsSold` | `StateFlow<Int>` | Sum of all item quantities sold today |
+| `lastSaleBrief` | `StateFlow<SaleBrief?>` | ID, total amount, and timestamp of the most recent sale |
+
+The total product count comes from `ProductViewModel.products` (the full product list), so the Dashboard does not need its own product query.
+
+## UI layout
+
+The screen uses a single vertically-scrollable column with 16 dp spacing between sections:
+
+1. Stats grid (4 metric cards, stacked vertically with 12 dp gaps)
+2. Weekly activity chart (full width)
+3. Low-stock banner (conditionally rendered, amber/warning color)
+4. Quick-access cards (4 full-width tappable cards)
+
+<CardGroup cols={2}>
+  <Card title="Products" icon="box" href="/features/products">
+    Manage your product catalog and stock levels.
+  </Card>
+  <Card title="Sales" icon="shopping-cart" href="/features/sales">
+    Register new sales and view today's history.
+  </Card>
+  <Card title="Purchases" icon="trending-up" href="/features/purchases">
+    Record stock replenishment purchases.
+  </Card>
+  <Card title="Cash closure" icon="wallet" href="/features/cash-closure">
+    Review the daily financial summary.
+  </Card>
+</CardGroup>

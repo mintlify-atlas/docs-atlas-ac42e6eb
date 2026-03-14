@@ -1,0 +1,127 @@
+---
+title: CashClosureViewModel
+description: ViewModel and factory reference for the daily cash closure, including sales/purchase totals, net income, and day reset.
+---
+
+`CashClosureViewModel` aggregates the current day's financial summary and provides operations to export a report and reset the day's data.
+
+## Constructor
+
+```kotlin
+class CashClosureViewModel(
+    private val saleDao: SaleDao,
+    private val movementDao: MovementDao,
+    private val purchaseDao: PurchaseDao,
+) : ViewModel()
+```
+
+<ParamField path="saleDao" type="SaleDao" required>
+  Provides today's sales total and count.
+</ParamField>
+
+<ParamField path="movementDao" type="MovementDao" required>
+  Provides today's inventory movements and the delete operation for day reset.
+</ParamField>
+
+<ParamField path="purchaseDao" type="PurchaseDao" required>
+  Provides today's purchases total.
+</ParamField>
+
+## Factory
+
+```kotlin
+class CashClosureViewModelFactory(
+    private val saleDao: SaleDao,
+    private val purchaseDao: PurchaseDao,
+    private val movementDao: MovementDao
+) : ViewModelProvider.Factory {
+    @Suppress("UNCHECKED_CAST")
+    override fun <T : ViewModel> create(modelClass: Class<T>): T {
+        if (modelClass.isAssignableFrom(CashClosureViewModel::class.java)) {
+            return CashClosureViewModel(saleDao, movementDao, purchaseDao) as T
+        }
+        throw IllegalArgumentException("Unknown ViewModel class")
+    }
+}
+```
+
+<Note>
+  The factory parameter order is `saleDao, purchaseDao, movementDao`, but the `CashClosureViewModel` constructor receives them as `saleDao, movementDao, purchaseDao`. The factory wires them correctly.
+</Note>
+
+## State properties
+
+```kotlin
+val salesTotal: StateFlow<Double>
+val salesCount: StateFlow<Int>
+val purchasesTotal: StateFlow<Double>
+val netIncome: StateFlow<Double>
+val avgTicket: StateFlow<Double>
+val movementsToday: StateFlow<List<MovimientoInventario>>
+```
+
+| Property | Type | Initial value | Description |
+|---|---|---|---|
+| `salesTotal` | `StateFlow<Double>` | `0.0` | Sum of all sale totals today. Sourced from `SaleDao.todaySalesTotal()`. |
+| `salesCount` | `StateFlow<Int>` | `0` | Number of sale transactions today. Sourced from `SaleDao.todaySalesCount()`. |
+| `purchasesTotal` | `StateFlow<Double>` | `0.0` | Sum of all purchase totals today. Sourced from `PurchaseDao.todayPurchasesTotal()`. |
+| `netIncome` | `StateFlow<Double>` | `0.0` | Derived: `salesTotal - purchasesTotal`. Calculated with `combine`. |
+| `avgTicket` | `StateFlow<Double>` | `0.0` | Derived: `salesTotal / salesCount`. Returns `0.0` when `salesCount` is `0`. Calculated with `combine`. |
+| `movementsToday` | `StateFlow<List<MovimientoInventario>>` | `emptyList()` | All inventory movements recorded today, ordered newest first. Sourced from `MovementDao.todayMovements()`. |
+
+### Derived state implementation
+
+```kotlin
+val netIncome: StateFlow<Double> =
+    combine(salesTotal, purchasesTotal) { s, p -> s - p }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0.0)
+
+val avgTicket: StateFlow<Double> =
+    combine(salesTotal, salesCount) { s, c -> if (c <= 0) 0.0 else s / c }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0.0)
+```
+
+## Methods
+
+### resetDay
+
+```kotlin
+fun resetDay(onDone: () -> Unit): Job
+```
+
+Deletes all of today's sales, purchases, and inventory movements in sequence, then calls `onDone()`. This operation is irreversible.
+
+```kotlin
+fun resetDay(onDone: () -> Unit) = viewModelScope.launch {
+    saleDao.deleteTodaySales()
+    purchaseDao.deleteTodayPurchases()
+    movementDao.deleteTodayMovements()
+    onDone()
+}
+```
+
+<Warning>
+  `resetDay` permanently deletes today's records from the database. This action cannot be undone. The app should present a confirmation dialog before calling this method.
+</Warning>
+
+### generateReport
+
+```kotlin
+fun generateReport(context: Context, onDone: (Uri?) -> Unit): Job
+```
+
+Generates a CSV file in the app's cache directory (`reporte_cierre.csv`) with the following rows:
+
+| Concepto | Value source |
+|---|---|
+| Total Ventas | `salesTotal.value` |
+| Total Compras | `purchasesTotal.value` |
+| Ganancia Neta | `netIncome.value` |
+| Cantidad de Ventas | `salesCount.value` |
+| Ticket Promedio | `avgTicket.value` |
+
+The file is shared via `FileProvider` and the resulting `Uri` is passed to `onDone`. If an exception occurs, `onDone(null)` is called.
+
+<Tip>
+  Call `generateReport` before `resetDay` if you need to retain a record of the day's activity. Once `resetDay` runs, the data used to populate the report is gone.
+</Tip>

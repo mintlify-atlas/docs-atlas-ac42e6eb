@@ -1,0 +1,196 @@
+---
+title: 'Database'
+description: 'Room database setup, entity overview, DAO interfaces, foreign key relationships, and migration strategy for Bodequita.'
+---
+
+Bodequita stores all data locally in a single Room (SQLite) database named `minitienda.db`.
+
+## AppDatabase setup
+
+The database is declared as an abstract class annotated with `@Database`:
+
+```kotlin
+@Database(
+    entities = [
+        Product::class,
+        Category::class,
+        Sale::class,
+        SaleDetail::class,
+        Supplier::class,
+        Purchase::class,
+        PurchaseDetail::class,
+        MovimientoInventario::class
+    ],
+    version = 8,
+    exportSchema = true
+)
+abstract class AppDatabase : RoomDatabase() {
+    abstract fun productDao(): ProductDao
+    abstract fun categoryDao(): CategoryDao
+    abstract fun saleDao(): SaleDao
+    abstract fun supplierDao(): SupplierDao
+    abstract fun purchaseDao(): PurchaseDao
+    abstract fun movementDao(): MovementDao
+}
+```
+
+Each abstract function returns a DAO interface. Room generates the concrete implementations at compile time via KAPT.
+
+---
+
+## Entity and table overview
+
+| Entity class | Table name | Description |
+|---|---|---|
+| `Product` | `producto` | Product catalogue: name, code, price, stock, category |
+| `Category` | `categoria` | Product categories; `nombre` has a unique index |
+| `Sale` | `venta` | Sale header: timestamp, total amount |
+| `SaleDetail` | `detalle_venta` | Line items for a sale; composite PK (`sale_id`, `product_id`) |
+| `Supplier` | `proveedor` | Suppliers: RUC (tax ID), name, phone |
+| `Purchase` | `compra` | Purchase header: supplier, timestamp, total |
+| `PurchaseDetail` | `detalle_compra` | Line items for a purchase; composite PK (`purchase_id`, `product_id`) |
+| `MovimientoInventario` | `movimiento_inventario` | Inventory movement log: type (`AJUSTE`, `COMPRA`, `VENTA`), quantity |
+
+---
+
+## DAO interface pattern
+
+DAOs are plain Kotlin interfaces annotated with `@Dao`. Room generates thread-safe implementations. Queries that return `Flow<T>` are reactive — Room re-emits whenever the queried table is modified.
+
+### ProductDao — reactive query and upsert
+
+```kotlin
+@Dao
+interface ProductDao {
+
+    @Query("SELECT * FROM producto ORDER BY name ASC")
+    fun observeAllProducts(): Flow<List<Product>>
+
+    @Query("UPDATE producto SET stock = stock - :qty WHERE id = :productId AND stock >= :qty")
+    suspend fun decreaseStock(productId: Int, qty: Int): Int
+
+    @Transaction
+    suspend fun upsertByCode(p: Product) {
+        val id = insertIgnore(p)
+        if (id == -1L) {
+            updateByCode(p.name, p.price, p.stock, p.descripcion, p.code)
+        }
+    }
+}
+```
+
+### SaleDao — aggregation queries
+
+```kotlin
+@Dao
+interface SaleDao {
+
+    @Insert
+    suspend fun insertSale(sale: Sale): Long
+
+    @Transaction
+    @Query("SELECT * FROM venta ORDER BY fecha DESC")
+    fun observeSales(): Flow<List<SaleWithDetails>>
+
+    @Query("""
+        SELECT
+            DATE(fecha / 1000, 'unixepoch', 'localtime') AS saleDate,
+            SUM(total) AS total
+        FROM venta
+        WHERE fecha >= :sevenDaysAgoTimestamp
+        GROUP BY saleDate
+        ORDER BY saleDate ASC
+    """)
+    fun getWeeklySalesSummary(sevenDaysAgoTimestamp: Long): Flow<List<DailySaleSummary>>
+}
+```
+
+### SupplierDao — upsert by business key
+
+```kotlin
+@Dao
+interface SupplierDao {
+
+    @Query("SELECT * FROM proveedor ORDER BY nombre ASC")
+    fun observeAll(): Flow<List<Supplier>>
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertIgnore(s: Supplier): Long
+
+    @Query("UPDATE proveedor SET nombre = :nombre, telefono = :telefono WHERE ruc = :ruc")
+    suspend fun updateByRuc(ruc: String, nombre: String, telefono: String?): Int
+}
+```
+
+---
+
+## Foreign key relationships
+
+```
+categoria
+    └── producto (category_id → categoria.id, ON DELETE SET NULL)
+            ├── detalle_venta (product_id → producto.id, ON DELETE RESTRICT)
+            ├── detalle_compra (product_id → producto.id, ON DELETE RESTRICT)
+            └── movimiento_inventario (producto_id → producto.id, ON DELETE CASCADE)
+
+venta
+    └── detalle_venta (sale_id → venta.id, ON DELETE CASCADE)
+
+compra
+    └── detalle_compra (purchase_id → compra.id, ON DELETE CASCADE)
+```
+
+**On-delete behaviours:**
+
+- `detalle_venta.sale_id` and `detalle_compra.purchase_id` use **CASCADE** — deleting a sale or purchase header removes all its line items automatically.
+- `detalle_venta.product_id` and `detalle_compra.product_id` use **RESTRICT** — a product cannot be deleted while it still appears in a transaction record.
+- `producto.category_id` uses **SET NULL** — deleting a category does not delete its products; it just clears their category assignment.
+- `movimiento_inventario.producto_id` uses **CASCADE** — inventory movement records are deleted along with their product.
+
+---
+
+## Accessing the database
+
+The database instance is built once inside `MainNavigation` using `produceState`, which runs the builder off the main thread and caches the result for the lifetime of the composition:
+
+```kotlin
+val dbState by produceState<AppDatabase?>(initialValue = null, key1 = context) {
+    value = Room.databaseBuilder(
+        context,
+        AppDatabase::class.java,
+        "minitienda.db"
+    ).build()
+}
+```
+
+An `AppDbProvider` singleton (in `AppDatabase.kt`) also exists for use outside of Compose contexts:
+
+```kotlin
+object AppDbProvider {
+    @Volatile private var INSTANCE: AppDatabase? = null
+
+    fun get(context: android.content.Context): AppDatabase =
+        INSTANCE ?: synchronized(this) {
+            androidx.room.Room.databaseBuilder(
+                context.applicationContext,
+                AppDatabase::class.java,
+                "minitienda.db"
+            )
+                .fallbackToDestructiveMigration()
+                .build()
+                .also { INSTANCE = it }
+        }
+}
+```
+
+---
+
+## Database version and migration strategy
+
+The current schema version is **8** (`version = 8` in `@Database`). The app uses `fallbackToDestructiveMigration()` in `AppDbProvider`, which means that if Room detects a schema version mismatch with no registered migration path, it drops and recreates the database.
+
+<Note>
+  `fallbackToDestructiveMigration()` is acceptable during active development but will erase all user data on schema changes in production. Before releasing to end users, replace this with explicit `Migration` objects or a proper migration strategy.
+</Note>
+
+Room exports the schema to JSON files (via `exportSchema = true`) in `app/schemas/`. These files are useful for writing migration tests with `MigrationTestHelper`.

@@ -1,0 +1,130 @@
+---
+title: Suppliers
+description: Suppliers represent the businesses or individuals you buy stock from. Each purchase is linked to a supplier, giving you a clear record of where your inventory comes from.
+---
+
+Suppliers are managed directly from the Purchases screen. Every registered purchase must be associated with a supplier, so keeping your supplier list up to date is essential for accurate purchase history.
+
+## Supplier data model
+
+```kotlin
+@Entity(
+    tableName = "proveedor",
+    indices = [
+        Index(value = ["ruc"], unique = true),
+        Index(value = ["nombre"], unique = true)
+    ]
+)
+data class Supplier(
+    @PrimaryKey(autoGenerate = true) val id: Int = 0,
+    val ruc: String,
+    val nombre: String,
+    val telefono: String? = null
+)
+```
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `ruc` | String | Yes | Unique tax ID. Used as the natural key for upsert operations. |
+| `nombre` | String | Yes | Supplier's trading name. Must also be unique. |
+| `telefono` | String? | No | Contact phone number. |
+
+Both `ruc` and `nombre` have unique indexes, so attempting to add a supplier with a duplicate RUC or name is silently ignored (`INSERT OR IGNORE`).
+
+## Creating and managing suppliers
+
+Suppliers are created from the **Purchases** screen. In the Proveedor section, tap **Gestionar** to open the supplier manager dialog. Fill in the RUC, name, and optionally a phone number, then tap **Guardar**.
+
+<Steps>
+  <Step title="Open the supplier manager">
+    Go to the Purchases screen and tap **Gestionar** next to the Proveedor header.
+  </Step>
+  <Step title="Enter supplier details">
+    Fill in the **RUC** (required), **Nombre** (required), and **Teléfono** (optional).
+  </Step>
+  <Step title="Save the supplier">
+    Tap **Guardar**. The new supplier becomes immediately available in the supplier dropdown.
+  </Step>
+</Steps>
+
+To rename a supplier, use the `SupplierViewModel.renameSupplier` operation, which updates the `nombre` field by ID. To delete a supplier, use `SupplierViewModel.deleteSupplier`.
+
+<Note>
+RUC and name are both required when creating a supplier. If you attempt to save without filling in either field, a snackbar message `"RUC y nombre son obligatorios"` is shown and no record is created.
+</Note>
+
+## How suppliers are linked to purchases
+
+Every `Purchase` record stores the supplier's `id` in the `proveedor_id` column:
+
+```kotlin
+@Entity(tableName = "compra")
+data class Purchase(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    @ColumnInfo(name = "proveedor_id") val proveedorId: Int,
+    val fecha: Long = System.currentTimeMillis(),
+    val total: Double
+)
+```
+
+This means purchase history is always traceable back to a specific supplier. When you select a supplier in the Purchases screen and tap **Registrar compra**, that supplier's `id` is written to the `compra` table.
+
+## SupplierDao operations
+
+The `SupplierDao` provides the following database operations:
+
+```kotlin
+@Dao
+interface SupplierDao {
+
+    // Stream all suppliers alphabetically
+    @Query("SELECT * FROM proveedor ORDER BY nombre ASC")
+    fun observeAll(): Flow<List<Supplier>>
+
+    // Insert; returns -1 if RUC or name already exists
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertIgnore(s: Supplier): Long
+
+    // Rename a supplier by its primary key
+    @Query("UPDATE proveedor SET nombre = :nuevo WHERE id = :id")
+    suspend fun rename(id: Int, nuevo: String): Int
+
+    // Look up a supplier by RUC
+    @Query("SELECT * FROM proveedor WHERE ruc = :ruc LIMIT 1")
+    suspend fun findByRuc(ruc: String): Supplier?
+
+    // Update name and phone for a given RUC
+    @Query("UPDATE proveedor SET nombre = :nombre, telefono = :telefono WHERE ruc = :ruc")
+    suspend fun updateByRuc(ruc: String, nombre: String, telefono: String?): Int
+
+    @Delete
+    suspend fun delete(s: Supplier): Unit
+}
+```
+
+`observeAll` returns a `Flow` so the supplier dropdown in the Purchases screen always reflects the latest data without manual refreshes.
+
+## SupplierViewModel
+
+The `SupplierViewModel` wraps the DAO and exposes:
+
+| State / Action | Type | Description |
+|---|---|---|
+| `suppliers` | `StateFlow<List<Supplier>>` | Live list of all suppliers, sorted by name |
+| `events` | `SharedFlow<String>` | Feedback messages for add / rename / delete operations |
+| `addSupplier(ruc, nombre, telefono)` | Function | Creates a new supplier; emits an error if the RUC or name is already taken |
+| `renameSupplier(id, nuevoNombre)` | Function | Updates the supplier's display name |
+| `deleteSupplier(supplier)` | Function | Removes the supplier record |
+
+<Tip>
+Use the supplier's official RUC as the unique identifier. This makes it easy to look up purchase history by tax ID and avoids accidental duplicate records.
+</Tip>
+
+<CardGroup cols={2}>
+  <Card title="Purchases" icon="trending-up" href="/features/purchases">
+    See how suppliers are selected when registering a purchase.
+  </Card>
+  <Card title="Cash closure" icon="wallet" href="/features/cash-closure">
+    Purchases linked to suppliers feed the daily expenses total.
+  </Card>
+</CardGroup>

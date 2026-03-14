@@ -1,0 +1,113 @@
+---
+title: Cash closure
+description: The Cash Closure module gives you a daily financial summary — total income from sales, total expenses from purchases, net profit, and a report you can export as a CSV file.
+---
+
+The Cash Closure screen (Cierre de Caja) is your end-of-day financial view. It aggregates all sales and purchases recorded today into a clear income/expense breakdown and calculates your net profit and average ticket.
+
+## What the screen shows
+
+Four metric cards at the top summarize today's activity:
+
+| Card | What it shows |
+|---|---|
+| **Total Ventas** | Sum of all completed sale totals for today |
+| **Total Compras** | Sum of all purchase costs recorded today |
+| **Ganancia Neta** | Net profit: Total Ventas − Total Compras, with margin percentage |
+| **Transacciones** | Count of individual sale transactions completed today |
+
+Below the cards, the **Resumen Detallado** section breaks down the same numbers in a structured list and adds two additional metrics:
+
+- **Ticket Promedio** — Average sale value (Total Ventas ÷ number of transactions)
+- **Margen de Ganancia** — Net profit as a percentage of total sales revenue
+
+## How to perform a cash closure
+
+<Steps>
+  <Step title="Review the day's summary">
+    Open **Cierre de Caja** from the Dashboard or the side menu. Check the four metric cards and the detailed summary to confirm the numbers look correct.
+  </Step>
+  <Step title="Generate the report">
+    Tap **Generar Reporte**. The app creates a CSV file with all the day's figures and opens the Android share sheet so you can send it via email, WhatsApp, or any other app on your device.
+  </Step>
+  <Step title="Reset the day">
+    Once you have saved or shared the report, tap **Reiniciar Día** to clear today's sales, purchases, and inventory movements from the active records. A progress indicator is shown while the reset runs.
+  </Step>
+</Steps>
+
+<Note>
+Generate and save the report **before** tapping Reiniciar Día. The reset deletes today's sales, purchases, and movements and cannot be undone.
+</Note>
+
+## Generated report format
+
+The exported file is a CSV named `reporte_cierre.csv` with two columns:
+
+```
+Concepto,Valor
+Total Ventas,<value>
+Total Compras,<value>
+Ganancia Neta,<value>
+Cantidad de Ventas,<value>
+Ticket Promedio,<value>
+```
+
+The file is shared through the Android system share sheet and can be opened in any spreadsheet application.
+
+## Movement tracking
+
+In addition to sales and purchases, the app records `MovimientoInventario` events whenever stock changes. Today's movements are available in the ViewModel as `movementsToday` and are included in the reset operation.
+
+### Movement data model
+
+```kotlin
+@Entity(
+    tableName = "movimiento_inventario",
+    indices = [Index("producto_id")],
+    foreignKeys = [
+        ForeignKey(
+            entity = Product::class,
+            parentColumns = ["id"],
+            childColumns = ["producto_id"],
+            onDelete = ForeignKey.CASCADE
+        )
+    ]
+)
+data class MovimientoInventario(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    @ColumnInfo(name = "producto_id") val productoId: Int,
+    val fecha: Long = System.currentTimeMillis(),
+    val tipo: String,    // "AJUSTE" | "COMPRA" | "VENTA"
+    val cantidad: Int
+)
+```
+
+Each movement record stores the product it affects, a timestamp, a type (`AJUSTE`, `COMPRA`, or `VENTA`), and the quantity changed. Deleting a product cascades to its movement history.
+
+## CashClosureViewModel state
+
+The `CashClosureViewModel` derives all values directly from live database queries:
+
+| State | Type | Calculation |
+|---|---|---|
+| `salesTotal` | `StateFlow<Double>` | Sum of today's `venta.total` rows |
+| `salesCount` | `StateFlow<Int>` | Count of today's `venta` rows |
+| `purchasesTotal` | `StateFlow<Double>` | Sum of today's `compra.total` rows |
+| `netIncome` | `StateFlow<Double>` | `salesTotal − purchasesTotal` |
+| `avgTicket` | `StateFlow<Double>` | `salesTotal ÷ salesCount` (0 if no sales) |
+| `movementsToday` | `StateFlow<List<MovimientoInventario>>` | All inventory movements recorded today |
+
+All flows use `SharingStarted.WhileSubscribed(5_000)` so they stay active while the screen is visible and stop 5 seconds after the screen is left.
+
+<Tip>
+Close your day at a consistent time each evening so that "today" comparisons in the Dashboard and Cash Closure always reflect a clean 24-hour window.
+</Tip>
+
+<CardGroup cols={2}>
+  <Card title="Sales" icon="shopping-cart" href="/features/sales">
+    Sales are the primary source of daily income tracked here.
+  </Card>
+  <Card title="Purchases" icon="trending-up" href="/features/purchases">
+    Purchases are the primary source of daily expenses tracked here.
+  </Card>
+</CardGroup>

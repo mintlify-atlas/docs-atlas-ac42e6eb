@@ -1,0 +1,151 @@
+---
+title: 'MVVM pattern'
+description: 'How Bodequita implements the Model-View-ViewModel pattern using Jetpack Compose, StateFlow, and the repository abstraction layer.'
+---
+
+Bodequita separates responsibilities across three layers. Each layer communicates only with the layer directly below it.
+
+## The three layers
+
+**View — Compose screens**
+
+Compose screens observe `StateFlow` values from the ViewModel and call ViewModel functions in response to user interaction. Screens hold no business logic and no direct references to the database.
+
+**ViewModel — state and business logic**
+
+Each screen has a dedicated ViewModel that:
+- Holds the screen's UI state as `StateFlow` or `MutableStateFlow`.
+- Launches coroutines via `viewModelScope` for database writes.
+- Emits one-shot UI events (e.g., snackbar messages) via `SharedFlow`.
+
+**Repository — data access**
+
+Repositories wrap DAO interfaces and expose suspending functions and `Flow` streams to the ViewModel. They are the only layer that can combine data from multiple DAOs or run multi-step Room transactions.
+
+---
+
+## StateFlow and Flow in the UI
+
+Room DAOs return `Flow<T>` — a cold stream that emits a new value whenever the underlying table changes. The ViewModel converts this to a `StateFlow` using `stateIn`, so Compose can collect it safely within the composition lifecycle.
+
+### ProductViewModel — products as StateFlow
+
+```kotlin
+class ProductViewModel(private val repository: ProductRepository) : ViewModel() {
+
+    // Lista reactiva desde Room (Flow -> StateFlow)
+    val products: StateFlow<List<Product>> =
+        repository.observeAllProducts()
+            .stateIn(
+                scope = viewModelScope,
+                started = SharingStarted.WhileSubscribed(5_000),
+                initialValue = emptyList()
+            )
+
+    // Canal de eventos para la UI (snackbar)
+    private val _events = MutableSharedFlow<String>(extraBufferCapacity = 1)
+    val events: SharedFlow<String> = _events.asSharedFlow()
+
+    fun upsertProduct(product: Product) = viewModelScope.launch {
+        try {
+            repository.upsertByCode(product)
+            _events.tryEmit("Producto guardado")
+        } catch (e: Exception) {
+            _events.tryEmit("Error al guardar: ${e.message ?: "desconocido"}")
+        }
+    }
+}
+```
+
+`SharingStarted.WhileSubscribed(5_000)` means the upstream Flow from Room stays active as long as there is at least one collector, and cancels 5 seconds after the last collector disappears (e.g., when the screen leaves composition).
+
+The `_events` / `events` pair follows the standard pattern for one-shot UI events: a private `MutableSharedFlow` is exposed as a read-only `SharedFlow`. The screen collects this in a `LaunchedEffect` to show snackbars.
+
+---
+
+## The factory pattern for ViewModels
+
+Android's `ViewModelProvider` normally instantiates ViewModels using a no-arg constructor. Because Bodequita's ViewModels require a `Repository` argument, each ViewModel ships with a `ViewModelProvider.Factory`:
+
+```kotlin
+class ProductViewModelFactory(private val repository: ProductRepository) : ViewModelProvider.Factory {
+    override fun <T : ViewModel> create(modelClass: Class<T>): T {
+        if (modelClass.isAssignableFrom(ProductViewModel::class.java)) {
+            @Suppress("UNCHECKED_CAST")
+            return ProductViewModel(repository) as T
+        }
+        throw IllegalArgumentException("Unknown ViewModel class")
+    }
+}
+```
+
+In `MainNavigation`, the factory is created inside `remember` to prevent a new instance on every recomposition, and then passed to `viewModel(factory = factory)`:
+
+```kotlin
+val productViewModel: ProductViewModel = run {
+    val repository = remember { ProductRepository(db.productDao()) }
+    val factory = remember { ProductViewModelFactory(repository) }
+    viewModel(factory = factory)
+}
+```
+
+---
+
+## Repository pattern
+
+### ProductRepository — wrapping the DAO
+
+```kotlin
+class ProductRepository(private val productDao: ProductDao) {
+
+    fun observeAllProducts() = productDao.observeAllProducts()
+
+    suspend fun upsertByCode(p: Product) = productDao.upsertByCode(p)
+
+    suspend fun deleteProduct(p: Product) = productDao.deleteProduct(p)
+
+    suspend fun updateProduct(p: Product) = productDao.updateProduct(p)
+
+    suspend fun countAll(): Int = productDao.countAll()
+}
+```
+
+For simpler domains, the repository is a thin delegation layer. For more complex operations, such as recording a sale, the repository performs a Room transaction that spans multiple DAOs.
+
+### SaleRepository — multi-DAO transaction
+
+```kotlin
+suspend fun makeSale(cart: List<CartItem>): Long {
+    require(cart.isNotEmpty()) { "Carrito vacío" }
+
+    return db.withTransaction {
+        for (item in cart) {
+            val updated = productDao.decreaseStock(item.product.id, item.qty)
+            if (updated == 0) {
+                throw IllegalStateException("Stock insuficiente para ${item.product.name}")
+            }
+        }
+        val total = cart.sumOf { it.subtotal }
+        val saleId = saleDao.insertSale(Sale(total = total))
+        val details = cart.map {
+            SaleDetail(
+                saleId = saleId,
+                productId = it.product.id,
+                cantidad = it.qty,
+                precioUnit = it.product.price,
+                subtotal = it.subtotal
+            )
+        }
+        saleDao.insertDetails(details)
+        saleId
+    }
+}
+```
+
+If `decreaseStock` returns `0` (no rows updated, meaning stock was insufficient), the exception rolls back the entire transaction — no sale record is created and no stock is decremented.
+
+**Why use the repository pattern?**
+
+- **Abstraction**: The ViewModel does not know whether data comes from Room, a network API, or a cache. Swapping the data source requires changing only the repository.
+- **Testability**: Unit tests for the ViewModel can inject a fake repository without touching Room or a real database.
+- **Transaction encapsulation**: Multi-step operations (like `makeSale`) live in one place, keeping ViewModels free of transaction logic.

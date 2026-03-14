@@ -1,0 +1,93 @@
+---
+title: 'Architecture overview'
+description: 'High-level description of the Bodequita app architecture, module structure, technology stack, and navigation graph.'
+---
+
+Bodequita follows the **MVVM (Model-View-ViewModel)** pattern recommended by Google for Android Jetpack apps. Data flows in one direction through clearly separated layers:
+
+```
+UI (Compose screens)
+       ↓ observes StateFlow / SharedFlow
+ViewModel  (state + business logic)
+       ↓ calls suspend funs / Flow
+Repository  (single source of truth)
+       ↓ delegates to
+Room DAO  (SQL queries)
+       ↓ reads/writes
+Room Database  (minitienda.db)
+```
+
+The UI layer never touches the database directly. ViewModels never import Room types. This separation makes each layer independently testable.
+
+## Module breakdown
+
+<CardGroup cols={3}>
+  <Card title="data" icon="database">
+    Room entities (`@Entity`), DAO interfaces (`@Dao`), and the `AppDatabase` / `AppDbProvider` singleton. Located under `data/model`, `data/dao`, and `data/database`.
+  </Card>
+  <Card title="repository" icon="layer-group">
+    One repository class per domain (`ProductRepository`, `SaleRepository`, `PurchaseRepository`, `CategoryRepository`). Wraps DAO calls and encapsulates multi-step transactions.
+  </Card>
+  <Card title="viewmodel" icon="brain">
+    One `ViewModel` per screen, each paired with a `ViewModelProvider.Factory`. Exposes immutable `StateFlow` / `SharedFlow` to the UI and launches coroutines via `viewModelScope`.
+  </Card>
+  <Card title="screens" icon="layout">
+    Jetpack Compose screen composables (e.g., `DashboardScreen`, `SalesScreen`, `ProductListScreen`). Contains `MainNavigation.kt`, which owns the `NavHost` and instantiates all ViewModels.
+  </Card>
+  <Card title="ui" icon="palette">
+    `MiniTiendaTheme`, color schemes, and typography. Dark-mode state is managed by `ThemeManager`, which is created in `MainActivity` and passed down to `MainNavigation`.
+  </Card>
+  <Card title="utils" icon="wrench">
+    Shared utilities, including `ThemeManager`, which persists the dark-mode preference and exposes it as a `StateFlow<Boolean>`.
+  </Card>
+</CardGroup>
+
+## Technology stack
+
+| Technology | Version | Role |
+|---|---|---|
+| Kotlin | 2.x (JVM 17) | Primary language |
+| Jetpack Compose + Material 3 | BOM-managed | Declarative UI |
+| Room | 2.6.1 | Local SQLite ORM |
+| Navigation Compose | Jetpack | Screen routing |
+| Kotlin Coroutines + Flow | Bundled with KTX | Async data streams |
+| Vico charts (`compose-m3`) | 1.13.0 | Weekly sales chart on dashboard |
+| KAPT | Gradle plugin | Room annotation processing |
+
+## App initialization
+
+`MainActivity.onCreate` creates a `ThemeManager`, wraps everything in `MiniTiendaTheme`, and delegates to the `MainNavigation` composable.
+
+`MainNavigation` uses `produceState` to build the Room database exactly once on the composition thread:
+
+```kotlin
+val dbState by produceState<AppDatabase?>(initialValue = null, key1 = context) {
+    value = Room.databaseBuilder(
+        context,
+        AppDatabase::class.java,
+        "minitienda.db"
+    ).build()
+}
+```
+
+While `dbState` is `null`, a `CircularProgressIndicator` is shown. Once the database is ready, each ViewModel is instantiated using its factory pattern and wrapped in `remember` to prevent recreation on recomposition.
+
+## Navigation structure
+
+All routing is handled by a single `NavHost` inside `MainNavigation`. The start destination is `login`; all other routes are accessible via a `ModalNavigationDrawer`.
+
+| Route | Screen | Description |
+|---|---|---|
+| `login` | `LoginScreen` | App entry point |
+| `dashboard` | `DashboardScreen` | KPI cards and weekly sales chart |
+| `products` | `ProductListScreen` | Searchable product catalogue |
+| `product_registration` | `ProductRegistrationScreen` | Create a new product |
+| `product_registration/{productId}` | `ProductRegistrationScreen` | Edit an existing product |
+| `sales` | `SalesScreen` | Cart-based point-of-sale screen |
+| `purchases` | `PurchasesScreen` | Record stock purchases from suppliers |
+| `cash_closure` | `CashClosureScreen` | Daily cash close summary |
+| `profile` | `ProfileScreen` | User settings and theme toggle |
+
+<Note>
+  The `product_registration/{productId}` route accepts an integer `productId` argument via `navArgument`. If the product is not found in the current `StateFlow` snapshot, the screen opens in create mode.
+</Note>

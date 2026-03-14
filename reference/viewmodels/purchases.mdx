@@ -1,0 +1,190 @@
+---
+title: PurchasesViewModel
+description: ViewModel, factory, and repository reference for stock purchasing and supplier management.
+---
+
+`PurchasesViewModel` manages two parallel cart flows: a resolved cart (products identified by code) and a draft cart (products identified by name or code that may not yet exist in the database). It also handles supplier creation.
+
+## Constructor
+
+```kotlin
+class PurchasesViewModel(
+    private val repo: PurchaseRepository,
+    private val productDao: ProductDao,
+    private val supplierDao: SupplierDao
+) : ViewModel()
+```
+
+<ParamField path="repo" type="PurchaseRepository" required>
+  Handles database transactions for creating purchases.
+</ParamField>
+
+<ParamField path="productDao" type="ProductDao" required>
+  Used to look up and create products during the draft purchase flow.
+</ParamField>
+
+<ParamField path="supplierDao" type="SupplierDao" required>
+  Used to read the supplier list and insert new suppliers.
+</ParamField>
+
+## Factory
+
+```kotlin
+class PurchasesViewModelFactory(
+    private val repo: PurchaseRepository,
+    private val productDao: ProductDao,
+    private val supplierDao: SupplierDao
+) : ViewModelProvider.Factory
+```
+
+## State properties
+
+```kotlin
+val suppliers: StateFlow<List<Supplier>>
+val cart: StateFlow<List<PurchaseRepository.CartItem>>
+val total: StateFlow<Double>
+val events: SharedFlow<String>
+val draftCart: StateFlow<List<DraftLine>>
+val draftTotal: StateFlow<Double>
+```
+
+| Property | Type | Description |
+|---|---|---|
+| `suppliers` | `StateFlow<List<Supplier>>` | Live list of all suppliers sorted by name. Sourced from `SupplierDao.observeAll()`. |
+| `cart` | `StateFlow<List<CartItem>>` | Resolved purchase cart. Items are confirmed products identified by `code`. |
+| `total` | `StateFlow<Double>` | Derived sum of `qty * cost` for all items in `cart`. |
+| `events` | `SharedFlow<String>` | One-shot messages for snackbar display. |
+| `draftCart` | `StateFlow<List<DraftLine>>` | Draft purchase lines identified by name or code. Products may not yet exist in the database. |
+| `draftTotal` | `StateFlow<Double>` | Derived sum of `qty * cost` for all items in `draftCart`. |
+
+### CartItem (resolved)
+
+Defined in `PurchaseRepository`:
+
+```kotlin
+data class CartItem(val product: Product, val qty: Int, val cost: Double) {
+    val subtotal: Double = qty * cost
+}
+```
+
+### DraftLine
+
+Defined inside `PurchasesViewModel`:
+
+```kotlin
+data class DraftLine(
+    val nameOrCode: String,
+    val qty: Int,
+    val cost: Double
+)
+```
+
+## Cart management methods
+
+### addByCode
+
+```kotlin
+fun addByCode(code: String, qty: Int, cost: Double): Job
+```
+
+Looks up the product by `code` (trimmed and uppercased) in `ProductDao`. If found and inputs are valid, adds or merges the item into `cart` (matching by `productId` and `cost`).
+
+### remove
+
+```kotlin
+fun remove(productId: Int, cost: Double)
+```
+
+Removes the cart item matching both `productId` and `cost`.
+
+### clearCart
+
+```kotlin
+fun clearCart()
+```
+
+Clears the resolved cart.
+
+## Draft cart methods
+
+### addDraftLine
+
+```kotlin
+fun addDraftLine(nameOrCode: String, qty: Int, cost: Double)
+```
+
+Adds a line to the draft cart identified by name or code. If a line with the same `nameOrCode` and `cost` already exists, its quantity is incremented.
+
+### removeDraftLine
+
+```kotlin
+fun removeDraftLine(nameOrCode: String, cost: Double)
+```
+
+Removes the draft line matching `nameOrCode` (case-insensitive) and `cost`.
+
+### clearDraftCart
+
+```kotlin
+fun clearDraftCart()
+```
+
+Clears all draft lines.
+
+## Purchase submission
+
+### finalizeDraftPurchase
+
+```kotlin
+fun finalizeDraftPurchase(supplierId: Int): Job
+```
+
+Materializes the draft cart into real products and records the purchase:
+
+1. For each `DraftLine`, looks up the product by `code` in `ProductDao`.
+2. If the product does not exist, calls `ProductDao.insertIgnoreMinimal` followed by `ProductDao.updateByCode` to create a minimal product record.
+3. Builds the resolved `CartItem` list.
+4. Calls `PurchaseRepository.makePurchase(supplierId, items)` to persist the purchase and increment stock.
+5. Clears the draft cart and emits a confirmation message with the purchase ID.
+
+<Note>
+  If a product cannot be created or found after the insert attempt, that line is skipped and a warning is emitted. The rest of the purchase proceeds.
+</Note>
+
+## Supplier management
+
+### upsertSupplierByRuc
+
+```kotlin
+fun upsertSupplierByRuc(ruc: String, nombre: String, telefono: String?): Job
+```
+
+Attempts to insert a new supplier using `SupplierDao.insertIgnore`. If the supplier already exists (returns `-1L`), emits `"El proveedor ya existe"`. Both `ruc` and `nombre` must be non-blank.
+
+---
+
+## PurchaseRepository
+
+```kotlin
+class PurchaseRepository(
+    private val db: AppDatabase,
+    private val purchaseDao: PurchaseDao,
+    private val productDao: ProductDao
+)
+```
+
+### makePurchase
+
+```kotlin
+suspend fun makePurchase(supplierId: Int, lines: List<CartItem>): Long
+```
+
+Runs on `Dispatchers.IO`:
+
+1. Calculates total cost.
+2. Inserts the `Purchase` header via `PurchaseDao.insertPurchase`.
+3. Maps `CartItem` list to `PurchaseDetail` rows and inserts via `PurchaseDao.insertDetails`.
+4. Increments each product's stock via `ProductDao.updateProduct`.
+5. Returns the generated purchase ID.
+
+Throws `IllegalArgumentException("El carrito está vacío")` if `lines` is empty.
