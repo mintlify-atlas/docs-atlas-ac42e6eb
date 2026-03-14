@@ -1,0 +1,57 @@
+{
+  "projectType": "saas",
+  "projectName": "Bodequita",
+  "projectDescription": "An Android mobile app for small store management built with Kotlin, Jetpack Compose, and Room, featuring sales, purchases, product inventory, supplier tracking, and cash closure modules.",
+  "theme": "almond",
+  "primaryColor": "#f76040",
+  "lightColor": "#13c5be",
+  "darkColor": "#a35cfb",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Overview",
+        "groups": [
+          { "group": "Get Started", "pages": ["introduction", "quickstart"] },
+          { "group": "Architecture", "pages": ["architecture/overview", "architecture/mvvm", "architecture/database"] }
+        ]
+      },
+      {
+        "tab": "Features",
+        "groups": [
+          { "group": "Modules", "pages": ["features/dashboard", "features/products", "features/sales", "features/purchases", "features/suppliers", "features/cash-closure"] },
+          { "group": "UI", "pages": ["features/navigation", "features/theming"] }
+        ]
+      },
+      {
+        "tab": "Reference",
+        "groups": [
+          { "group": "Data Models", "pages": ["reference/models/product", "reference/models/sale", "reference/models/purchase", "reference/models/supplier", "reference/models/category"] },
+          { "group": "ViewModels", "pages": ["reference/viewmodels/product", "reference/viewmodels/sales", "reference/viewmodels/purchases", "reference/viewmodels/dashboard", "reference/viewmodels/cash-closure"] }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Product inventory management with categories and stock tracking",
+    "Sales module with multi-item orders, subtotals, taxes, and history",
+    "Purchases module linked to suppliers with automatic stock updates",
+    "Cash closure with daily income, expense, and net profit summaries",
+    "Supplier management linked to purchase records",
+    "Dashboard with charts and quick-access statistics",
+    "MVVM architecture with Room local database",
+    "Jetpack Compose UI with Material Design 3 and dark/light theme support"
+  ],
+  "publicApiSurface": [
+    "ProductDao: insert, update, delete, getAllProducts, getProductById, searchProducts",
+    "SaleDao: insertSale, insertSaleDetail, getSalesWithDetails, getDailySaleSummaries",
+    "PurchaseDao: insertPurchase, insertPurchaseDetail, getPurchasesWithDetails",
+    "SupplierDao: insert, update, delete, getAllSuppliers",
+    "CategoryDao: insert, update, delete, getAllCategories",
+    "MovementDao: insert, getMovementsByDate",
+    "ProductViewModel: products, addProduct, updateProduct, deleteProduct",
+    "SalesViewModel: salesWithDetails, addSale, deleteSale",
+    "PurchasesViewModel: purchasesWithDetails, addPurchase",
+    "DashboardViewModel: dashboardStats, weeklySalesSummary",
+    "CashClosureViewModel: dailySummary, movements, registerClosure"
+  ]
+}
